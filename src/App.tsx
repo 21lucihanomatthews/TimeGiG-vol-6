@@ -10,12 +10,13 @@ import { motion, AnimatePresence } from 'motion/react';
 export default function App() {
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('isLoggedIn') === 'true');
-  const [authMode, setAuthMode] = useState<'login' | 'register' | 'verify' | 'set-pin'>('login');
+  const [authMode, setAuthMode] = useState<'login' | 'register' | 'verify'>('register');
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPin, setLoginPin] = useState('');
+  const [acceptTerms, setAcceptTerms] = useState(false);
   const [verificationCode, setVerificationCode] = useState('');
   const [enteredCode, setEnteredCode] = useState('');
-  const [tempUserData, setTempUserData] = useState<{email: string} | null>(null);
+  const [tempUserData, setTempUserData] = useState<{email: string, pin: string} | null>(null);
   const [showVerificationPopup, setShowVerificationPopup] = useState(false);
   const [currentView, setCurrentView] = useState<'seeker' | 'profile-edit' | 'gigs' | 'wallet' | 'profile-details' | 'inbox' | 'chat' | 'admin'>(() => (localStorage.getItem('currentView') as any) || 'seeker');
   const [profileCompleted, setProfileCompleted] = useState(() => localStorage.getItem('profileCompleted') === 'true');
@@ -73,6 +74,7 @@ export default function App() {
   const [appliedGigs, setAppliedGigs] = useState<number[]>(() => JSON.parse(localStorage.getItem('appliedGigs') || '[]') as number[]);
   const [selectedSeeker, setSelectedSeeker] = useState<{id: number, name: string} | null>(null);
   const [activeChat, setActiveChat] = useState<number | null>(null);
+  const [adminPendingApprovals, setAdminPendingApprovals] = useState<any[]>([]);
   const [showPopup, setShowPopup] = useState(false);
   const [popupMessage, setPopupMessage] = useState('');
   const [messages, setMessages] = useState<Record<number, { sender: 'me' | 'other', text: string}[]>>(() => JSON.parse(localStorage.getItem('messages') || '{}') as Record<number, { sender: 'me' | 'other', text: string}[]>);
@@ -87,7 +89,7 @@ export default function App() {
 
     const syncState = async () => {
       try {
-        await fetch('/api/sync', {
+        const res = await fetch('/api/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -99,6 +101,24 @@ export default function App() {
             }
           })
         });
+
+        if (res.ok) {
+          const data = await res.json();
+          // If the server merged data (like new receipts or balance), update local state
+          if (data.state) {
+            const remote = data.state;
+            // Only update if there is a real difference to avoid render loops
+            if (remote.balance !== undefined && remote.balance !== balance) {
+              setBalance(remote.balance);
+            }
+            if (remote.profileData && JSON.stringify(remote.profileData) !== JSON.stringify(profileData)) {
+              setProfileData(remote.profileData);
+            }
+            if (remote.transactions && JSON.stringify(remote.transactions) !== JSON.stringify(transactions)) {
+              setTransactions(remote.transactions);
+            }
+          }
+        }
       } catch (e) {
         console.error("Failed to sync to Supabase:", e);
       }
@@ -137,6 +157,14 @@ export default function App() {
       }
     };
     loadState();
+    
+    // Auto-refresh for Admin every 30 seconds
+    let poller: any;
+    if (isLoggedIn && profileData.email === '21lucihanomatthews@gmail.com') {
+      poller = setInterval(loadState, 30000);
+    }
+    
+    return () => { if (poller) clearInterval(poller); };
   }, [isLoggedIn]);
 
   // Standard Persistence Effects
@@ -155,92 +183,135 @@ export default function App() {
   useEffect(() => { if (backgroundWallpaper) localStorage.setItem('backgroundWallpaper', backgroundWallpaper); else localStorage.removeItem('backgroundWallpaper'); }, [backgroundWallpaper]);
 
   const handleLogin = async () => {
-    if (!loginEmail || !loginPin) {
-      alert("Please enter email and PIN");
+    const normalizedEmail = loginEmail.trim().toLowerCase();
+    if (!normalizedEmail || !loginPin) {
+      alert("Please enter your email and 4-digit PIN");
       return;
     }
 
     try {
-      const res = await fetch(`/api/state/${loginEmail}`);
-      if (res.ok) {
-        const state = await res.json();
-        if (state && state.profileData) {
-          if (state.profileData.pin === loginPin) {
-            // Full state synchronization on login
-            setIsLoggedIn(true);
-            setProfileData(state.profileData);
-            if (state.currentView) setCurrentView(state.currentView);
-            if (state.profileCompleted !== undefined) setProfileCompleted(state.profileCompleted);
-            if (state.balance !== undefined) setBalance(state.balance);
-            if (state.transactions) setTransactions(state.transactions);
-            if (state.pendingApprovals) setPendingApprovals(state.pendingApprovals);
-            if (state.businessRequests) setBusinessRequests(state.businessRequests);
-            if (state.isBusinessMode !== undefined) setIsBusinessMode(state.isBusinessMode);
-            if (state.appliedGigs) setAppliedGigs(state.appliedGigs);
-            if (state.messages) setMessages(state.messages);
-            if (state.gigs) setGigs(state.gigs);
-            if (state.backgroundWallpaper) setBackgroundWallpaper(state.backgroundWallpaper);
-            
-            setPopupMessage("Successfully logged in!");
-            setShowPopup(true);
-            setTimeout(() => setShowPopup(false), 2000);
-          } else {
-            alert("Incorrect PIN");
-          }
-        } else {
-          alert("Account not found. Please register first.");
-          setAuthMode('register');
-        }
+      const res = await fetch(`/api/state/${normalizedEmail}`);
+      if (!res.ok) {
+        throw new Error(`Server responded with ${res.status}`);
       }
-    } catch (e) {
+      
+      const state = await res.json();
+      if (state && state.profileData) {
+        if (state.profileData.pin === loginPin) {
+          setIsLoggedIn(true);
+          setProfileData(state.profileData);
+          
+          // Full state restoration
+          if (state.currentView) setCurrentView(state.currentView);
+          if (state.profileCompleted !== undefined) setProfileCompleted(state.profileCompleted);
+          if (state.balance !== undefined) setBalance(state.balance);
+          if (state.transactions) setTransactions(state.transactions);
+          if (state.pendingApprovals) setPendingApprovals(state.pendingApprovals);
+          if (state.businessRequests) setBusinessRequests(state.businessRequests);
+          if (state.isBusinessMode !== undefined) setIsBusinessMode(state.isBusinessMode);
+          if (state.appliedGigs) setAppliedGigs(state.appliedGigs);
+          if (state.messages) setMessages(state.messages);
+          if (state.gigs) setGigs(state.gigs);
+          if (state.backgroundWallpaper) setBackgroundWallpaper(state.backgroundWallpaper);
+          
+          setPopupMessage("Welcome back!");
+          setShowPopup(true);
+          setTimeout(() => setShowPopup(false), 2000);
+        } else {
+          alert("Incorrect PIN for this email. Try again.");
+        }
+      } else {
+        alert(`No account found for ${normalizedEmail}. Please register first.`);
+        setAuthMode('register');
+      }
+    } catch (e: any) {
       console.error("Login Error:", e);
-      alert("Login failed. Please check your connection.");
+      alert("System Error: Could not connect to the authentication server. Please try again later.");
     }
   };
 
-  const handleRegister = async () => {
-    if (!loginEmail) {
+  const handleRegisterInitiate = () => {
+    const normalizedEmail = loginEmail.trim().toLowerCase();
+    if (!normalizedEmail) {
       alert("Please enter a valid email address");
       return;
     }
-    
-    // Generate a 6-digit verification code
+    if (loginPin.length !== 4) {
+      alert("Please choose a 4-digit secret PIN");
+      return;
+    }
+    if (!acceptTerms) {
+      alert("You must accept the Terms and Conditions to continue");
+      return;
+    }
+
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     setVerificationCode(code);
-    setTempUserData({ email: loginEmail });
+    setTempUserData({ email: normalizedEmail, pin: loginPin });
     setAuthMode('verify');
     setShowVerificationPopup(true);
   };
 
   const handleVerify = async () => {
-    if (enteredCode === verificationCode && tempUserData) {
-      setAuthMode('set-pin');
-      setPopupMessage("Email verified! Now choose your secret 4-digit PIN.");
-      setShowPopup(true);
-      setTimeout(() => setShowPopup(false), 3000);
-    } else {
-      alert("Invalid verification code");
-    }
-  };
-
-  const handleSetPin = async () => {
-    if (loginPin.length !== 4) {
-      alert("PIN must be 4 digits");
+    if (enteredCode !== verificationCode || !tempUserData) {
+      alert("Invalid verification code. Please check the code in the popup.");
       return;
     }
 
-    if (tempUserData) {
-      const newProfile = { ...profileData, email: tempUserData.email, pin: loginPin };
+    const newProfile = { 
+      ...profileData, 
+      email: tempUserData.email, 
+      pin: tempUserData.pin,
+      isVisible: true // Ensure visible by default
+    };
+    
+    try {
+      // First, attempt to save the new user record to the server
+      const syncRes = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: tempUserData.email,
+          state: {
+            currentView, 
+            profileCompleted: false, 
+            balance: 0, 
+            transactions: [],
+            pendingApprovals: [], 
+            businessRequests: [], 
+            isBusinessMode: false,
+            profileData: newProfile,
+            appliedGigs: [], 
+            messages: [], 
+            gigs: gigs, // include global gigs
+            backgroundWallpaper,
+            isLoggedIn: true
+          }
+        })
+      });
+
+      if (!syncRes.ok) {
+        const errorData = await syncRes.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to initialize user record on server");
+      }
+
+      // If server save succeeded, update local state
       setProfileData(newProfile);
       setIsLoggedIn(true);
-      setPopupMessage("Account verified and PIN set successfully!");
+      setPopupMessage("Account verified and created successfully!");
       setShowPopup(true);
       setTimeout(() => setShowPopup(false), 3000);
+      
+    } catch (e: any) {
+      console.error("Registration Sync Error:", e);
+      alert(`Verification failed: ${e.message}. Please check if the backend is properly configured.`);
     }
   };
 
   const handleLogout = () => {
     setIsLoggedIn(false);
+    setAuthMode('login');
+    setShowVerificationPopup(false);
     localStorage.clear();
     setProfileData({
       fullName: '', dob: '', location: '', phone: '', email: '', gender: '', education: '', languages: '',
@@ -801,14 +872,21 @@ export default function App() {
             <button 
                disabled={!proofFile}
                onClick={() => { 
-                    const proofUrl = URL.createObjectURL(proofFile!);
-                    setTransactions([...transactions, {id: Date.now(), date: new Date().toLocaleDateString(), type: 'pending', amount: selectedTopup!.coins, proof: proofUrl}]); 
-                    setPendingApprovals([...pendingApprovals, {id: Date.now(), user: 'Current User', amount: selectedTopup!.coins, price: selectedTopup!.price, proof: proofUrl}]);
-                    setWalletSubView('main'); 
-                    setProofFile(null);
-                    alert("Proof submitted! Awaiting admin approval."); 
+                    if (!proofFile) return;
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const base64proof = reader.result as string;
+                        setTransactions([...transactions, {id: Date.now(), date: new Date().toLocaleDateString(), type: 'pending', amount: selectedTopup!.coins, proof: base64proof}]); 
+                        setPendingApprovals([...pendingApprovals, {id: Date.now(), user: profileData.email, amount: selectedTopup!.coins, price: selectedTopup!.price, proof: base64proof}]);
+                        setWalletSubView('main'); 
+                        setProofFile(null);
+                        setPopupMessage("Proof submitted! Awaiting admin approval.");
+                        setShowPopup(true);
+                        setTimeout(() => setShowPopup(false), 3000);
+                    };
+                    reader.readAsDataURL(proofFile);
                }} 
-               className={`w-full p-2 ${proofFile ? 'bg-green-600' : 'bg-gray-400'} text-white rounded`}>
+               className={`w-full p-2 ${proofFile ? 'bg-green-600' : 'bg-gray-400'} text-white rounded font-bold transition-all active:scale-95`}>
                Submit Proof
             </button>
             <button onClick={() => setWalletSubView('topup')} className="w-full p-2 text-gray-600">Back</button>
@@ -834,6 +912,7 @@ export default function App() {
             <button onClick={() => setWalletSubView('main')} className="w-full p-2 text-gray-600">Back</button>
           </div>
         );
+
         return (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-lg shadow border border-gray-100 text-center">
@@ -841,6 +920,7 @@ export default function App() {
               <p className="text-4xl font-bold text-gray-900 mt-2">{balance} <span className="text-gray-400">coins</span></p>
               <button onClick={() => setWalletSubView('topup')} className="mt-4 w-full p-2 bg-blue-600 text-white rounded font-semibold">Top Up</button>
             </div>
+
             <div className="bg-white p-4 rounded-lg shadow border border-gray-100">
               <h3 className="font-semibold text-gray-800 mb-2">Transactions</h3>
               {transactions.length === 0 ? <p className="text-sm text-gray-500">No recent transactions.</p> :
@@ -857,63 +937,145 @@ export default function App() {
           </div>
         );
       case 'admin':
-        const totalApprovedProfit = transactions.filter(t => t.type === 'bought').reduce((acc, curr) => acc + (curr.amount * 0.1), 0); // Mock 10% profit per coin bought
+        if (profileData.email !== '21lucihanomatthews@gmail.com') return <div className="p-8 text-center text-red-500 font-bold">Unauthorized Access</div>;
+        
+        const handleRefresh = async () => {
+          setPopupMessage("Refreshing data...");
+          setShowPopup(true);
+          try {
+            const res = await fetch(`/api/state/${profileData.email}`);
+            if (res.ok) {
+              const state = await res.json();
+              if (state && Object.keys(state).length > 0) {
+                if (state.balance !== undefined) setBalance(state.balance);
+                if (state.transactions) setTransactions(state.transactions);
+                if (state.pendingApprovals) setPendingApprovals(state.pendingApprovals);
+                if (state.profileData) setProfileData(state.profileData);
+              }
+            }
+            const resApprovals = await fetch(`/api/admin/pending-approvals?adminEmail=${profileData.email}`);
+            if (resApprovals.ok) {
+              setAdminPendingApprovals(await resApprovals.json());
+            }
+          } catch (e) {}
+          setTimeout(() => setShowPopup(false), 1000);
+        };
+
+        // Total profit includes top-ups (10% mock)
+        const totalApprovedProfit = transactions.filter(t => t.type === 'bought' && !t.note?.includes('Payment from')).reduce((acc, curr) => acc + (curr.amount * 0.1), 0);
         
         return (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-lg shadow border border-gray-100">
-              <h2 className="text-xl font-bold mb-4">Admin Dashboard</h2>
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold">Admin Dashboard</h2>
+                <button 
+                  onClick={handleRefresh}
+                  className="p-2 bg-blue-50 text-blue-600 rounded-lg text-xs font-bold flex items-center gap-2 hover:bg-blue-100 transition-colors"
+                >
+                  <MoreVertical className="w-3 h-3" /> Refresh
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="bg-blue-50 p-4 rounded-lg">
                   <p className="text-sm text-blue-600">Total Profit</p>
                   <p className="text-2xl font-bold">R{totalApprovedProfit.toFixed(2)}</p>
                 </div>
                 <div className="bg-green-50 p-4 rounded-lg">
-                  <p className="text-sm text-green-600">Pending Payments</p>
-                  <p className="text-2xl font-bold">{pendingApprovals.length}</p>
+                   <p className="text-sm text-green-600">Pending Payments</p>
+                   <p className="text-2xl font-bold">{adminPendingApprovals.length}</p>
                 </div>
               </div>
 
               <h3 className="font-bold mb-2">Pending Coin Approvals</h3>
               <div className="space-y-4">
-                {pendingApprovals.length === 0 ? <p className="text-gray-500 text-sm">No pending coin approvals.</p> : 
-                pendingApprovals.map(pa => (
+                {adminPendingApprovals.length === 0 ? <p className="text-gray-500 text-sm">No pending coin approvals. Use Refresh to check.</p> : 
+                adminPendingApprovals.map(pa => (
                   <div key={pa.id} className="p-4 border rounded-lg space-y-2 bg-gray-50">
                     <div className="flex justify-between">
-                        <span className="font-medium text-sm">{pa.user}</span>
+                        <span className="font-medium text-sm text-gray-700">{pa.user}</span>
                         <span className="font-bold text-blue-600 text-sm">{pa.amount} coins ({pa.price})</span>
                     </div>
-                    <div className="mt-2">
-                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Proof Image</p>
-                        <img src={pa.proof} className="w-24 h-24 object-cover rounded border bg-white cursor-pointer" alt="proof" onClick={() => window.open(pa.proof)} />
+                    <div className="mt-2 text-center bg-white p-2 rounded border">
+                        <p className="text-[10px] text-gray-400 uppercase font-bold mb-1 text-left">Proof Image</p>
+                        {pa.proof ? (
+                          <img 
+                            src={pa.proof} 
+                            className="inline-block max-w-full max-h-48 rounded cursor-pointer hover:opacity-90" 
+                            alt="proof" 
+                            onClick={() => {
+                              const w = window.open("");
+                              if (w) {
+                                w.document.title = `Proof from ${pa.user}`;
+                                w.document.body.style.margin = "0";
+                                w.document.body.style.backgroundColor = "#000";
+                                w.document.body.innerHTML = `<div style="display:flex;justify-content:center;align-items:center;height:100vh;"><img src="${pa.proof}" style="max-width:100%;max-height:100%;"></div>`;
+                              }
+                            }} 
+                          />
+                        ) : <div className="p-4 text-gray-400 italic text-xs">No image provided</div>}
                     </div>
                     <div className="flex gap-2 pt-2">
                         <button 
-                            onClick={() => {
-                                setBalance(balance + pa.amount);
-                                setTransactions(transactions.map(t => t.proof === pa.proof ? {...t, type: 'bought'} : t));
-                                setPendingApprovals(pendingApprovals.filter(p => p.id !== pa.id));
-                                
-                                // Send Inbox Notification
-                                const adminMsg = {sender: 'other' as const, text: `Your payment for ${pa.amount} coins has been APPROVED. Your balance has been updated.`};
-                                setMessages(prev => ({...prev, 100: [...(prev[100] || []), adminMsg]}));
-                                
-                                alert(`Approved ${pa.amount} coins for ${pa.user}`);
+                            onClick={async () => {
+                                try {
+                                  const res = await fetch('/api/admin/approve-topup', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                      userEmail: pa.user,
+                                      amount: pa.amount,
+                                      adminEmail: profileData.email,
+                                      requestId: pa.id
+                                    })
+                                  });
+
+                                  if (res.ok) {
+                                    if (pa.user === profileData.email) {
+                                      setBalance(balance + pa.amount);
+                                      setTransactions(transactions.map(t => (t.id === pa.id || t.proof === pa.proof) ? {...t, type: 'bought', note: 'Approved'} : t));
+                                      setPendingApprovals(pendingApprovals.filter(p => p.id !== pa.id));
+                                    }
+                                    setAdminPendingApprovals(adminPendingApprovals.filter(p => p.id !== pa.id));
+                                    setPopupMessage(`Approved ${pa.amount} coins for ${pa.user}`);
+                                    setShowPopup(true);
+                                    setTimeout(() => setShowPopup(false), 3000);
+                                  } else {
+                                    alert("Server failed to approve.");
+                                  }
+                                } catch (e) {
+                                  alert("System error during approval.");
+                                }
                             }}
-                            className="flex-1 bg-green-600 text-white py-1 px-2 rounded text-xs font-semibold"
+                            className="flex-1 bg-green-600 text-white py-2 px-2 rounded-lg text-[11px] font-bold active:scale-95 transition-all"
                         >Approve</button>
                         <button 
-                            onClick={() => {
-                                setTransactions(transactions.filter(t => t.proof !== pa.proof));
-                                setPendingApprovals(pendingApprovals.filter(p => p.id !== pa.id));
-                                
-                                // Send Inbox Notification
-                                const adminMsg = {sender: 'other' as const, text: `Your payment proof for ${pa.amount} coins was REJECTED. Please contact support if you believe this is an error.`};
-                                setMessages(prev => ({...prev, 100: [...(prev[100] || []), adminMsg]}));
-                                
-                                alert("Rejected payment proof.");
+                            onClick={async () => {
+                                try {
+                                  const res = await fetch('/api/admin/reject-topup', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                      userEmail: pa.user,
+                                      adminEmail: profileData.email,
+                                      requestId: pa.id
+                                    })
+                                  });
+                                  if (res.ok) {
+                                    if (pa.user === profileData.email) {
+                                      setTransactions(transactions.filter(t => (t.id !== pa.id && t.proof !== pa.proof)));
+                                      setPendingApprovals(pendingApprovals.filter(p => p.id !== pa.id));
+                                    }
+                                    setAdminPendingApprovals(adminPendingApprovals.filter(p => p.id !== pa.id));
+                                    setPopupMessage("Rejected.");
+                                    setShowPopup(true);
+                                    setTimeout(() => setShowPopup(false), 3000);
+                                  }
+                                } catch (e) {
+                                  alert("System error during rejection.");
+                                }
                             }}
-                            className="flex-1 bg-red-600 text-white py-1 px-2 rounded text-xs font-semibold"
+                            className="flex-1 bg-red-600 text-white py-2 px-2 rounded-lg text-[11px] font-bold active:scale-95 transition-all"
                         >Reject</button>
                     </div>
                   </div>
@@ -1008,11 +1170,11 @@ export default function App() {
           </div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">TimeGIG</h1>
           <p className="text-gray-500 mb-8">
-            {authMode === 'login' ? 'Welcome Back!' : (authMode === 'register' ? 'Join the community' : 'Verify your account')}
+            {authMode === 'register' ? 'Join the community' : (authMode === 'login' ? 'Welcome back' : 'Verification')}
           </p>
           
           <div className="space-y-4">
-            {authMode === 'login' ? (
+            {authMode !== 'verify' ? (
               <>
                 <div className="space-y-1 text-left">
                   <label className="text-xs font-bold text-gray-400 uppercase ml-1">Email Address</label>
@@ -1025,59 +1187,55 @@ export default function App() {
                   />
                 </div>
                 <div className="space-y-1 text-left">
-                  <label className="text-xs font-bold text-gray-400 uppercase ml-1">Personal PIN</label>
+                  <label className="text-xs font-bold text-gray-400 uppercase ml-1">{authMode === 'register' ? 'Choose Your PIN' : 'Enter Your PIN'}</label>
                   <input 
                     type="password" 
                     placeholder="••••" 
                     maxLength={4}
                     value={loginPin} 
-                    onChange={e => setLoginPin(e.target.value)} 
-                    className="w-full p-4 border-2 border-gray-100 rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none tracking-widest text-2xl transition-all" 
+                    onChange={e => setLoginPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))} 
+                    className="w-full p-4 border-2 border-gray-100 rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none tracking-widest text-2xl transition-all text-center" 
                   />
                 </div>
+
+                {authMode === 'register' && (
+                  <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100 mt-2">
+                    <input 
+                      type="checkbox" 
+                      id="terms" 
+                      checked={acceptTerms} 
+                      onChange={e => setAcceptTerms(e.target.checked)}
+                      className="mt-1 w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <label htmlFor="terms" className="text-[11px] text-gray-500 leading-tight">
+                      I accept the <span className="text-blue-600 font-bold underline">Terms and Conditions</span> and understand my PIN will be required for all future access.
+                    </label>
+                  </div>
+                )}
+
                 <button 
-                  onClick={handleLogin}
-                  className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold shadow-xl shadow-blue-200 hover:bg-blue-700 active:scale-95 transition-all mt-4"
+                  onClick={authMode === 'register' ? handleRegisterInitiate : handleLogin}
+                  disabled={authMode === 'register' && !acceptTerms}
+                  className={`w-full ${authMode === 'register' ? 'bg-gray-900 disabled:bg-gray-400' : 'bg-blue-600'} text-white py-4 rounded-2xl font-bold shadow-xl hover:opacity-90 active:scale-95 transition-all mt-4`}
                 >
-                  Login Access
+                  {authMode === 'register' ? 'Save & Register' : 'Login Access'}
                 </button>
+                
                 <button 
-                  onClick={() => setAuthMode('register')}
+                  onClick={() => {
+                    setAuthMode(authMode === 'register' ? 'login' : 'register');
+                    setAcceptTerms(false);
+                  }}
                   className="text-sm font-semibold text-blue-600 hover:text-blue-700 mt-2 block mx-auto underline underline-offset-4"
                 >
-                  Create New Account
+                  {authMode === 'register' ? 'Already have an account? Login' : "Don't have an account? Register"}
                 </button>
               </>
-            ) : authMode === 'register' ? (
-              <>
-                <div className="space-y-1 text-left">
-                  <label className="text-xs font-bold text-gray-400 uppercase ml-1">Account Email</label>
-                  <input 
-                    type="email" 
-                    placeholder="you@example.com" 
-                    value={loginEmail} 
-                    onChange={e => setLoginEmail(e.target.value)} 
-                    className="w-full p-4 border-2 border-gray-100 rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none transition-all" 
-                  />
-                </div>
-                <button 
-                  onClick={handleRegister}
-                  className="w-full bg-gray-900 text-white py-4 rounded-2xl font-bold shadow-xl shadow-gray-200 hover:bg-black active:scale-95 transition-all mt-4"
-                >
-                  Send One-Time Code
-                </button>
-                <button 
-                  onClick={() => setAuthMode('login')}
-                  className="text-sm font-semibold text-gray-500 mt-2 block mx-auto"
-                >
-                  Already registered? Login
-                </button>
-              </>
-            ) : authMode === 'verify' ? (
+            ) : (
               <div className="space-y-6">
                 <div className="p-4 bg-yellow-50 border border-yellow-100 rounded-2xl text-left">
                   <p className="text-xs text-yellow-800 leading-relaxed font-medium text-center">
-                    Enter the one-time verification code shown on screen.
+                    Enter the one-time verification code shown on screen to finalize your registration.
                   </p>
                 </div>
                 <div className="flex justify-center gap-2">
@@ -1093,38 +1251,13 @@ export default function App() {
                   onClick={handleVerify}
                   className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold shadow-xl shadow-blue-200 hover:bg-blue-700 active:scale-95 transition-all"
                 >
-                  Verify Verification Code
+                  Verify One-Time Code
                 </button>
                 <button 
-                  onClick={() => setAuthMode('register')}
+                  onClick={() => setAuthMode('login')}
                   className="text-sm font-semibold text-gray-500"
                 >
-                  Wait, wrong email?
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl text-left mb-4">
-                  <p className="text-xs text-blue-800 leading-relaxed font-medium">
-                    Account verified! Now, <strong>create your own PIN</strong> to use for all future logins.
-                  </p>
-                </div>
-                <div className="space-y-1 text-left">
-                  <label className="text-xs font-bold text-gray-400 uppercase ml-1">Create Your PIN</label>
-                  <input 
-                    type="password" 
-                    placeholder="••••" 
-                    maxLength={4}
-                    value={loginPin} 
-                    onChange={e => setLoginPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))} 
-                    className="w-full p-4 border-2 border-blue-500 rounded-2xl bg-white outline-none tracking-widest text-3xl text-center transition-all" 
-                  />
-                </div>
-                <button 
-                  onClick={handleSetPin}
-                  className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold shadow-xl shadow-green-200 hover:bg-green-700 active:scale-95 transition-all mt-4"
-                >
-                  Finalize & Login
+                  Go Back
                 </button>
               </div>
             )}
@@ -1211,7 +1344,9 @@ export default function App() {
                   >
                     <button onClick={() => { setCurrentView('profile-edit'); setIsTopMenuOpen(false); }} className="flex items-center w-full px-4 py-2 hover:bg-gray-100 text-gray-700"><User className="w-4 h-4 mr-2" />Profile</button>
                     <button className="flex items-center w-full px-4 py-2 hover:bg-gray-100 text-gray-700"><Settings className="w-4 h-4 mr-2" />Settings</button>
-                    <button onClick={() => { setCurrentView('admin'); setIsTopMenuOpen(false); }} className="flex items-center w-full px-4 py-2 hover:bg-gray-100 text-gray-700"><Shield className="w-4 h-4 mr-2" />Admin</button>
+                    {profileData.email === '21lucihanomatthews@gmail.com' && (
+                      <button onClick={() => { setCurrentView('admin'); setIsTopMenuOpen(false); }} className="flex items-center w-full px-4 py-2 hover:bg-gray-100 text-gray-700"><Shield className="w-4 h-4 mr-2" />Admin</button>
+                    )}
                     <div className="border-t border-gray-100 my-1"></div>
                     <button onClick={handleLogout} className="flex items-center w-full px-4 py-2 hover:bg-red-50 text-red-600"><LogOut className="w-4 h-4 mr-2" />Logout</button>
                   </motion.div>
