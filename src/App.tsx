@@ -34,6 +34,7 @@ import {
   Square,
   Check,
   Info,
+  UserPlus,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { PricingModal } from "./components/PricingModal";
@@ -128,6 +129,7 @@ const ensureProfileData = (data: any): ProfileData => {
     telegram: data.telegram || "",
     contactMethod: data.contactMethod || "Any",
     contactHours: data.contactHours || "",
+    isDisabled: !!data.isDisabled,
   };
 };
 
@@ -531,6 +533,89 @@ const IdDocumentViewer = ({ src, onClose }: { src: string, onClose: () => void }
   );
 };
 
+const WelcomeModal = ({ onClose }: { onClose: () => void }) => {
+  const [step, setStep] = useState(0);
+  const steps = [
+    {
+      title: "Welcome to TimeGIG",
+      description: "Your local hub for short-term gigs and verified talent. Let's get you started!",
+      icon: <Info className="w-8 h-8 text-blue-600" />,
+    },
+    {
+      title: "Finding Gigs",
+      description: "Browse the 'GIGS' tab to find opportunities. Apply with a custom pitch to stand out.",
+      icon: <Briefcase className="w-8 h-8 text-[#001489]" />,
+    },
+    {
+      title: "Being a Seeker",
+      description: "Fill out your profile in 'SEEKER' tab to get hired. Businesses look for verified status!",
+      icon: <Search className="w-8 h-8 text-[#007749]" />,
+    },
+    {
+      title: "Wallet & Coins",
+      description: "Actions like messaging or viewing profiles use coins. Top up in the 'WALLET' section.",
+      icon: <Wallet className="w-8 h-8 text-[#FFB81C]" />,
+    },
+    {
+      title: "Safety First",
+      description: "Verify your identity with an ID document and a video pitch for maximum trust.",
+      icon: <Shield className="w-8 h-8 text-red-600" />,
+    },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-[100000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm shadow-2xl relative overflow-hidden"
+      >
+        <div className="absolute top-0 left-0 w-full h-2 flex">
+          {steps.map((_, i) => (
+            <div key={i} className={`flex-1 h-full transition-all duration-300 ${i <= step ? "bg-blue-600" : "bg-gray-100"}`} />
+          ))}
+        </div>
+
+        <div className="w-16 h-16 bg-gray-50 rounded-2xl flex items-center justify-center mx-auto mb-6 mt-4">
+          {steps[step].icon}
+        </div>
+
+        <h3 className="text-2xl font-black text-gray-900 text-center uppercase tracking-tight mb-2">
+          {steps[step].title}
+        </h3>
+        
+        <p className="text-gray-500 text-sm text-center leading-relaxed mb-10 font-medium h-20 flex items-center justify-center">
+          {steps[step].description}
+        </p>
+
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={() => {
+              if (step < steps.length - 1) {
+                setStep(step + 1);
+              } else {
+                onClose();
+              }
+            }}
+            className="w-full py-4 bg-gray-900 hover:bg-black text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl active:scale-95 transition-all"
+          >
+            {step < steps.length - 1 ? "Next " : "Get Started"}
+          </button>
+          
+          {step > 0 && (
+            <button
+              onClick={() => setStep(step - 1)}
+              className="w-full py-2.5 text-gray-400 hover:text-gray-600 font-black text-[10px] uppercase tracking-widest transition-all"
+            >
+              Back
+            </button>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
 function AppContent() {
 
   const [showSplash, setShowSplash] = useState(true);
@@ -543,6 +628,7 @@ function AppContent() {
   );
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPin, setLoginPin] = useState("");
+  const [emailCheckStatus, setEmailCheckStatus] = useState<"idle" | "checking" | "found" | "not_found">("idle");
   const [acceptTerms, setAcceptTerms] = useState(false);
   const [verificationCode, setVerificationCode] = useState("");
   const [enteredCode, setEnteredCode] = useState("");
@@ -625,7 +711,7 @@ function AppContent() {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [appliedGigs, setAppliedGigs] = useState<number[]>(
-    () => safeLoadJSON("appliedGigs", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+    () => safeLoadJSON("appliedGigs", []),
   );
   const [selectedSeeker, setSelectedSeeker] = useState<any | null>(null);
   const [seekers, setSeekers] = useState<any[]>([]);
@@ -660,10 +746,15 @@ function AppContent() {
   const streamRef = React.useRef<MediaStream | null>(null);
   const intervalRef = React.useRef<number | null>(null);
   const [isPricingModalOpen, setIsPricingModalOpen] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    return localStorage.getItem("hasSeenOnboarding") !== "true";
+  });
 
   useEffect(() => {
-    streamRef.current = stream;
-  }, [stream]);
+    if (!showSplash && showOnboarding) {
+      // Show onboarding after splash
+    }
+  }, [showSplash, showOnboarding]);
 
   useEffect(() => {
     return () => {
@@ -801,19 +892,15 @@ function AppContent() {
   >(() => {
     const defaultNotifications = [
       {
-        id: 1,
-        text: "New Gig 'Garden Help' available now!",
-        read: false,
-        type: "gig",
-      },
-      {
         id: 2,
         text: "Promotion: Top up today and get 10% bonus coins!",
         read: false,
         type: "promo",
       },
     ];
-    return safeLoadJSON("topBarNotifications", defaultNotifications);
+    return safeLoadJSON("topBarNotifications", defaultNotifications).filter(
+      (n) => n.id !== 1 && !n.text.includes("Garden Help")
+    );
   });
   const [gigs, setGigs] = useState<
     {
@@ -829,17 +916,6 @@ function AppContent() {
     }[]
   >(() => {
     const defaultGigs = [
-      {
-        id: 1,
-        title: "Garden Help",
-        description: "Professional weeding and lawn maintenance.",
-        creator: "Jane Smith",
-        fileUrls: [
-          "https://images.unsplash.com/photo-1592150621344-c6842106644f?w=400",
-        ],
-        views: 12,
-        applicants: 2,
-      },
       {
         id: 2,
         title: "Website React Developer",
@@ -940,7 +1016,9 @@ function AppContent() {
         applicants: 12,
       },
     ];
-    return safeLoadJSON("gigs", defaultGigs);
+    return safeLoadJSON("gigs", defaultGigs).filter(
+      (g) => g.id !== 1 && g.title !== "Garden Help"
+    );
   });
   const [newGig, setNewGig] = useState({
     title: "",
@@ -1314,7 +1392,26 @@ function AppContent() {
     backgroundWallpaper,
   ]);
 
-  // Load state from Supabase on Login change
+  // Check email existence
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (loginEmail.includes("@") && loginEmail.includes(".")) {
+        setEmailCheckStatus("checking");
+        try {
+          const res = await fetch(`/api/check-account?email=${encodeURIComponent(loginEmail)}`);
+          const data = await res.json();
+          setEmailCheckStatus(data.exists ? "found" : "not_found");
+        } catch (e) {
+          console.error("Failed to check account:", e);
+          setEmailCheckStatus("idle");
+        }
+      } else {
+        setEmailCheckStatus("idle");
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [loginEmail]);
   useEffect(() => {
     if (!isLoggedIn || !profileData.email) return;
 
@@ -1339,7 +1436,12 @@ function AppContent() {
               setProfileData(ensureProfileData(state.profileData));
             if (state.appliedGigs) setAppliedGigs(state.appliedGigs);
             if (state.messages) setMessages(state.messages);
-            if (state.gigs) setGigs(state.gigs);
+            if (state.gigs)
+              setGigs(
+                state.gigs.filter(
+                  (g: any) => g.id !== 1 && g.title !== "Garden Help"
+                )
+              );
             if (state.backgroundWallpaper)
               setBackgroundWallpaper(state.backgroundWallpaper);
           }
@@ -1483,7 +1585,12 @@ function AppContent() {
             setIsBusinessMode(state.isBusinessMode);
           if (state.appliedGigs) setAppliedGigs(state.appliedGigs);
           if (state.messages) setMessages(state.messages);
-          if (state.gigs) setGigs(state.gigs);
+          if (state.gigs)
+            setGigs(
+              state.gigs.filter(
+                (g: any) => g.id !== 1 && g.title !== "Garden Help"
+              )
+            );
           if (state.backgroundWallpaper)
             setBackgroundWallpaper(state.backgroundWallpaper);
 
@@ -3559,6 +3666,7 @@ function AppContent() {
                   </div>
                 </div>
 
+
                 {!isBusinessMode && (
                   <div className="mt-8 pt-6 border-t">
                     <h3 className="font-bold text-gray-800 mb-2">
@@ -5596,13 +5704,44 @@ function AppContent() {
                       <label className="text-xs font-bold text-gray-400 uppercase ml-1">
                         Email Address
                       </label>
-                      <input
-                        type="email"
-                        placeholder="you@example.com"
-                        value={loginEmail}
-                        onChange={(e) => setLoginEmail(e.target.value)}
-                        className="w-full p-4 border-2 border-gray-100 rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none transition-all"
-                      />
+                      <div className="relative">
+                        <input
+                          type="email"
+                          placeholder="you@example.com"
+                          value={loginEmail}
+                          onChange={(e) => setLoginEmail(e.target.value)}
+                          className={`w-full p-4 border-2 ${
+                            emailCheckStatus === "found" ? "border-green-500" : 
+                            emailCheckStatus === "not_found" ? "border-blue-300" :
+                            "border-gray-100"
+                          } rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none transition-all`}
+                        />
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center">
+                          {emailCheckStatus === "checking" && (
+                            <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                          )}
+                          {emailCheckStatus === "found" && (
+                            <div className="bg-green-100 text-green-600 p-1 rounded-full">
+                              <Check className="w-4 h-4" />
+                            </div>
+                          )}
+                          {emailCheckStatus === "not_found" && (
+                            <div className="bg-blue-50 text-blue-600 p-1 rounded-full">
+                              <UserPlus className="w-4 h-4" />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      {emailCheckStatus === "found" && (
+                        <p className="text-[10px] text-green-600 font-bold px-2 mt-1 uppercase tracking-wider">
+                          Welcome back! Account found.
+                        </p>
+                      )}
+                      {emailCheckStatus === "not_found" && (
+                        <p className="text-[10px] text-blue-600 font-bold px-2 mt-1 uppercase tracking-wider">
+                          New here? Welcome! Let's get you set up.
+                        </p>
+                      )}
                     </div>
                     <div className="space-y-1 text-left">
                       <label className="text-xs font-bold text-gray-400 uppercase ml-1">
@@ -5704,6 +5843,18 @@ function AppContent() {
               )}
             </AnimatePresence>
             
+            {/* Onboarding Modal */}
+            <AnimatePresence>
+              {!showSplash && showOnboarding && (
+                <WelcomeModal 
+                  onClose={() => {
+                    localStorage.setItem("hasSeenOnboarding", "true");
+                    setShowOnboarding(false);
+                  }} 
+                />
+              )}
+            </AnimatePresence>
+
             {/* Pricing Modal */}
             <AnimatePresence>
               {isPricingModalOpen && (
@@ -5859,7 +6010,7 @@ function AppContent() {
                             className="flex items-center w-full px-4 py-3 hover:bg-blue-50 text-gray-700 transition-colors"
                           >
                             <Info className="w-4 h-4 mr-3" />
-                            Prices & Instructions
+                            How to Use & Pricing
                           </button>
                           <button
                             onClick={() => {

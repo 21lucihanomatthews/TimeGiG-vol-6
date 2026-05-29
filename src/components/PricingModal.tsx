@@ -1,5 +1,5 @@
 import React from "react";
-import { X, Coin, Info } from "lucide-react";
+import { X, Info } from "lucide-react";
 
 export const PricingModal = ({ onClose }: { onClose: () => void }) => {
   const prices = [

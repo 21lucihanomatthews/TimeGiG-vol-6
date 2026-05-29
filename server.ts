@@ -233,6 +233,33 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+app.get("/api/check-account", async (req, res) => {
+  const email = req.query.email as string;
+  if (!email) return res.status(400).json({ error: "Email required" });
+
+  const normalizedEmail = email.trim().toLowerCase();
+  
+  // Check in-memory store
+  let exists = !!inMemoryStore[normalizedEmail];
+  
+  // If not found and Supabase is configured, check Supabase
+  if (!exists && supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("user_states")
+        .select("email")
+        .eq("email", normalizedEmail)
+        .maybeSingle();
+      
+      if (data) exists = true;
+    } catch (e) {
+      console.error("Supabase check error:", e);
+    }
+  }
+
+  res.json({ exists });
+});
+
 // Admin payments helper
 const adminEmail = '21lucihanomatthews@gmail.com';
 
@@ -560,93 +587,6 @@ app.get("/api/seekers", (req, res) => {
       }
     }
   });
-
-  if (seekers.length === 0) {
-    const mockSeekers = [
-      {
-        email: "thabo.mokoena@example.com",
-        fullName: "Thabo Mokoena",
-        workPreference: "Full-Time",
-        level: "Expert",
-        location: "Johannesburg, Gauteng",
-        pictures: {
-          front: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80"
-        },
-        education: "BSc Computer Science",
-        languages: "English, Zulu, Sotho",
-        info: "Senior software designer and web developer. Over 6 years of experience building modern frontend react apps.",
-        experience: "6 Years",
-        skills: "Python, React, TypeScript, Devops",
-        phone: "+27 11 123 4567",
-        whatsapp: "+27 82 123 4567",
-        telegram: "@thabotech",
-        contactMethod: "WhatsApp",
-        contactHours: "8 AM - 6 PM"
-      },
-      {
-        email: "sarah.naidoo@example.com",
-        fullName: "Sarah Naidoo",
-        workPreference: "Part-Time",
-        level: "Specialist",
-        location: "Durban, KwaZulu-Natal",
-        pictures: {
-          front: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80"
-        },
-        education: "National Diploma in Marketing",
-        languages: "English, Afrikaans, Zulu",
-        info: "Freelance social media specialist and graphic content designer with a flair for local brand promotion.",
-        experience: "3 Years",
-        skills: "Social Media, SEO, Copywriting, Canva",
-        phone: "+27 31 234 5678",
-        whatsapp: "+27 72 234 5678",
-        telegram: "@sarahsocial",
-        contactMethod: "Email",
-        contactHours: "9 AM - 5 PM"
-      },
-      {
-        email: "lerato.sekgobela@example.com",
-        fullName: "Lerato Sekgobela",
-        workPreference: "Flexible",
-        level: "Intermediate",
-        location: "Pretoria, Gauteng",
-        pictures: {
-          front: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"
-        },
-        education: "Diploma in Hospitality Services",
-        languages: "English, Pedi, Tswana",
-        info: "Professional event coordinator and premium catering assistant. Fast, dependable, and highly rated.",
-        experience: "4 Years",
-        skills: "Catering, Event Management, Hospitality",
-        phone: "+27 12 345 6789",
-        whatsapp: "+27 83 345 6789",
-        telegram: "@leratoevents",
-        contactMethod: "Any",
-        contactHours: "Anytime"
-      },
-      {
-        email: "piet.vandermerwe@example.com",
-        fullName: "Piet van der Merwe",
-        workPreference: "Temporary",
-        level: "Expert",
-        location: "Cape Town, Western Cape",
-        pictures: {
-          front: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80"
-        },
-        education: "Trade Certificate in Electrical Engineering",
-        languages: "Afrikaans, English",
-        info: "Certified master electrician and technical handyman. Capable of complex wiring installation and electrical repairs safely.",
-        experience: "8 Years",
-        skills: "Wiring, Electrical Repairs, Handyman",
-        phone: "+27 21 456 7890",
-        whatsapp: "+27 61 456 7890",
-        telegram: "@pietelec",
-        contactMethod: "Phone",
-        contactHours: "7 AM - 4 PM"
-      }
-    ];
-
-    return res.json(mockSeekers);
-  }
 
   res.json(seekers);
 });
