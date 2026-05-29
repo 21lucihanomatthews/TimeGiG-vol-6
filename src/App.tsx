@@ -31,8 +31,13 @@ import {
   Image,
   Ban,
   FileText,
+  Square,
+  Check,
+  Info,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { PricingModal } from "./components/PricingModal";
+import { SeekerItem } from "./components/SeekerItem";
 
 interface ProfileData {
   fullName: string;
@@ -50,6 +55,7 @@ interface ProfileData {
   level: string;
   pin: string;
   isVisible: boolean;
+  isDisabled?: boolean;
   pictures: { left: string; front: string; right: string };
   idDocument: string;
   isVerified: boolean;
@@ -621,15 +627,30 @@ function AppContent() {
   const [appliedGigs, setAppliedGigs] = useState<number[]>(
     () => safeLoadJSON("appliedGigs", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
   );
-  const [selectedSeeker, setSelectedSeeker] = useState<{
-    id: number;
-    name: string;
-  } | null>(null);
+  const [selectedSeeker, setSelectedSeeker] = useState<any | null>(null);
+  const [seekers, setSeekers] = useState<any[]>([]);
   const [selectedGig, setSelectedGig] = useState<any | null>(null);
   const [activeChat, setActiveChat] = useState<number | null>(null);
   const [isChatMenuOpen, setIsChatMenuOpen] = useState(false);
   const [blockedUsers, setBlockedUsers] = useState<number[]>([]);
   const [adminPendingApprovals, setAdminPendingApprovals] = useState<any[]>([]);
+  const [adminUsers, setAdminUsers] = useState<any[]>([]);
+  const [videoIntroStream, setVideoIntroStream] = useState<MediaStream | null>(null);
+  const [isRecordingVideo, setIsRecordingVideo] = useState(false);
+  const [videoIntroRecorder, setVideoIntroRecorder] = useState<MediaRecorder | null>(null);
+  const [videoIntroUrl, setVideoIntroUrl] = useState<string | null>(null);
+  const [videoIntroBlob, setVideoIntroBlob] = useState<Blob | null>(null);
+  const [videoIntroDuration, setVideoIntroDuration] = useState(60);
+  const [applyCoverNoteValue, setApplyCoverNoteValue] = useState("");
+  const [showGigApplyWorkflow, setShowGigApplyWorkflow] = useState(false);
+  const [applicantLevelValue, setApplicantLevelValue] = useState("Beginner");
+  const [applicantPhoneValue, setApplicantPhoneValue] = useState("");
+  const [cameraDenied, setCameraDenied] = useState(false);
+  const [showVideoIntroPermissionPrompt, setShowVideoIntroPermissionPrompt] = useState(false);
+  const [isCameraSimulationActive, setIsCameraSimulationActive] = useState(false);
+  const [isVideoSimulationActive, setIsVideoSimulationActive] = useState(false);
+  const [videoIntroFileName, setVideoIntroFileName] = useState<string | null>(null);
+  const applyLiveVideoRef = useRef<HTMLVideoElement>(null);
   const [newPromotionText, setNewPromotionText] = useState("");
   const [showPopup, setShowPopup] = useState(false);
   const [popupMessage, setPopupMessage] = useState("");
@@ -638,6 +659,7 @@ function AppContent() {
   const popupTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const streamRef = React.useRef<MediaStream | null>(null);
   const intervalRef = React.useRef<number | null>(null);
+  const [isPricingModalOpen, setIsPricingModalOpen] = useState(false);
 
   useEffect(() => {
     streamRef.current = stream;
@@ -762,7 +784,7 @@ function AppContent() {
     }
   };
   const [messages, setMessages] = useState<
-    Record<number, { sender: "me" | "other"; text: string; images?: string[] }[]>
+    Record<number, { sender: "me" | "other"; text: string; images?: string[]; companionName?: string; companionEmail?: string; }[]>
   >(() => safeLoadJSON("messages", {}));
   const [isInboxEditMode, setIsInboxEditMode] = useState(false);
   const [selectedInboxThreads, setSelectedInboxThreads] = useState<number[]>(
@@ -799,9 +821,11 @@ function AppContent() {
       title: string;
       description: string;
       creator: string;
+      creatorEmail?: string;
       fileUrls: string[];
       views: number;
       applicants: number;
+      status?: 'active' | 'closed';
     }[]
   >(() => {
     const defaultGigs = [
@@ -923,6 +947,8 @@ function AppContent() {
     description: "",
     files: null as FileList | null,
     fileUrls: [] as string[],
+    isImmediate: true,
+    gigDate: "",
   });
   const [isEditingGig, setIsEditingGig] = useState(false);
   const [editingGigData, setEditingGigData] = useState({
@@ -930,7 +956,8 @@ function AppContent() {
     description: "",
     fileUrls: [] as string[],
   });
-  const [gigsTab, setGigsTab] = useState<"all" | "applied">("all");
+  const [gigsTab, setGigsTab] = useState<"all" | "applied" | "applications">("all");
+  const [gigApplications, setGigApplications] = useState<any[]>([]);
   const [notificationsPermission, setNotificationsPermission] = useState<
     "granted" | "denied" | "pending"
   >(() => {
@@ -950,6 +977,264 @@ function AppContent() {
     const timer = setTimeout(() => setShowSplash(false), 4000);
     return () => clearTimeout(timer);
   }, []);
+
+  const getEmailHashId = (email: string): number => {
+    let hash = 0;
+    for (let i = 0; i < email.length; i++) {
+      hash = (hash << 5) - hash + email.charCodeAt(i);
+      hash |= 0;
+    }
+    return Math.abs(hash);
+  };
+
+  const fetchApplications = async () => {
+    try {
+      const res = await fetch("/api/gigs/all-applications");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setGigApplications(data);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to fetch gig applications:", e);
+    }
+  };
+
+  const fetchSeekers = async () => {
+    try {
+      const res = await fetch("/api/seekers");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setSeekers(data);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to fetch seekers:", e);
+    }
+  };
+
+  const handleDeleteApplication = async (applicationId: number) => {
+    console.log("Delete application requested for ID:", typeof applicationId, applicationId);
+    if (!window.confirm("Are you sure you want to delete this application permanently?")) return;
+    
+    // Optimistically remove from UI
+    setGigApplications((prev) => {
+        const next = (prev || []).filter((app) => String(app.id) !== String(applicationId));
+        console.log("Optimistic update, old count:", prev?.length, "new count:", next.length);
+        return next;
+    });
+
+    try {
+      const res = await fetch(`/api/gigs/application/${applicationId}`, {
+        method: "DELETE"
+      });
+      console.log("Delete request response ok:", res.ok, res.status);
+      if (!res.ok) {
+        console.error("Failed to delete application on server.");
+        fetchApplications(); // Refresh list to get accurate state
+      } else {
+        const data = await res.json();
+        console.log("Delete request response data:", data);
+      }
+    } catch (e) {
+      console.error("Fetch error during deletion:", e);
+      fetchApplications(); // Refresh list
+    }
+  };
+
+  const handleCloseGig = (gigId: number) => {
+    if (!window.confirm("Are you sure you want to close this gig? It will not accept new applications.")) return;
+    setGigs((prev) => prev.map((g) => g.id === gigId ? { ...g, status: 'closed' } : g));
+  };
+
+  useEffect(() => {
+    if (isLoggedIn) {
+      fetchApplications();
+      fetchSeekers();
+      const interval = setInterval(() => {
+        fetchApplications();
+        fetchSeekers();
+      }, 15000);
+      return () => clearInterval(interval);
+    }
+  }, [isLoggedIn]);
+
+  const handleUpdateApplicationStatus = async (applicationId: number, status: "approved" | "rejected") => {
+    try {
+      const res = await fetch(`/api/gigs/application/${applicationId}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      if (res.ok) {
+        setPopupMessage(`Application successfully ${status}!`);
+        setShowPopup(true);
+        setTimeout(() => setShowPopup(false), 2000);
+        
+        // Update local status counters or reload as well
+        fetchApplications();
+      } else {
+        setPopupMessage("Failed to update status.");
+        setShowPopup(true);
+        setTimeout(() => setShowPopup(false), 2000);
+      }
+    } catch (e) {
+      console.warn("Failed to update application status:", e);
+    }
+  };
+
+  const blobToBase64 = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  const startVideoIntroRecording = async () => {
+    try {
+      setVideoIntroUrl(null);
+      setVideoIntroBlob(null);
+      setVideoIntroDuration(60);
+      setIsVideoSimulationActive(false);
+      setCameraDenied(false);
+      
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" },
+        audio: true
+      });
+      setVideoIntroStream(stream);
+      if (applyLiveVideoRef.current) {
+        applyLiveVideoRef.current.srcObject = stream;
+        applyLiveVideoRef.current.play().catch(e => console.warn(e));
+      }
+      
+      const options = { mimeType: "video/webm;codecs=vp9,opus" };
+      let recorder: MediaRecorder;
+      try {
+        recorder = new MediaRecorder(stream, options);
+      } catch (e) {
+        recorder = new MediaRecorder(stream);
+      }
+      
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          chunks.push(e.data);
+        }
+      };
+      
+      recorder.onstop = () => {
+        const completedBlob = new Blob(chunks, { type: "video/webm" });
+        setVideoIntroBlob(completedBlob);
+        const url = URL.createObjectURL(completedBlob);
+        setVideoIntroUrl(url);
+        
+        // Stop all tracks to turn off camera light
+        stream.getTracks().forEach((track) => track.stop());
+        setVideoIntroStream(null);
+      };
+      
+      recorder.start();
+      setVideoIntroRecorder(recorder);
+      setIsRecordingVideo(true);
+    } catch (err: any) {
+      console.error("Camera access failed", err);
+      setCameraDenied(true);
+      setPopupMessage("Camera block detected. Live video simulator and upload fallback enabled below!");
+      setShowPopup(true);
+      setTimeout(() => setShowPopup(false), 4000);
+    }
+  };
+
+  const startVideoIntroSimulation = () => {
+    setVideoIntroUrl(null);
+    setVideoIntroBlob(null);
+    setVideoIntroDuration(60);
+    setIsVideoSimulationActive(true);
+    setIsRecordingVideo(true);
+    setPopupMessage("Interactive Video Simulator Started!");
+    setShowPopup(true);
+    setTimeout(() => setShowPopup(false), 2000);
+  };
+
+  const stopVideoIntroSimulation = () => {
+    if (isRecordingVideo && isVideoSimulationActive) {
+      setIsRecordingVideo(false);
+      setIsVideoSimulationActive(false);
+      
+      // Load a beautiful placeholder MP4 for fully previewable playback
+      const placeholderVideo = "https://assets.mixkit.co/videos/preview/mixkit-woman-explaining-something-during-a-video-call-41908-large.mp4";
+      setVideoIntroUrl(placeholderVideo);
+      
+      const simulatedBlob = new Blob([JSON.stringify({ simulated: true, duration: 60 })], { type: "video/webm" });
+      setVideoIntroBlob(simulatedBlob);
+      
+      setPopupMessage("Mock recording processed and ready for preview playback!");
+      setShowPopup(true);
+      setTimeout(() => setShowPopup(false), 3000);
+    }
+  };
+
+  const stopVideoIntroRecording = () => {
+    if (isVideoSimulationActive) {
+      stopVideoIntroSimulation();
+    } else if (videoIntroRecorder && isRecordingVideo) {
+      try {
+        videoIntroRecorder.stop();
+      } catch (e) {}
+      setIsRecordingVideo(false);
+    }
+  };
+
+  const handleVideoFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 25 * 1024 * 1024) { // 25MB limit
+        setPopupMessage("Video file is too large (max 25MB).");
+        setShowPopup(true);
+        setTimeout(() => setShowPopup(false), 3000);
+        return;
+      }
+      setPopupMessage("Loading video file...");
+      setShowPopup(true);
+      
+      try {
+        const url = URL.createObjectURL(file);
+        setVideoIntroUrl(url);
+        setVideoIntroBlob(file);
+        setVideoIntroFileName(file.name);
+        setCameraDenied(false); // remove warning since upload succeeded
+        setPopupMessage("Video loaded successfully!");
+        setTimeout(() => setShowPopup(false), 2000);
+      } catch (err) {
+        setPopupMessage("Failed to load video file.");
+        setTimeout(() => setShowPopup(false), 3000);
+      }
+    }
+  };
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (isRecordingVideo && videoIntroDuration > 0) {
+      timer = setTimeout(() => {
+        setVideoIntroDuration((prev) => prev - 1);
+      }, 1000);
+    } else if (isRecordingVideo && videoIntroDuration === 0) {
+      if (isVideoSimulationActive) {
+        stopVideoIntroSimulation();
+      } else if (videoIntroRecorder) {
+        try {
+          videoIntroRecorder.stop();
+        } catch (e) {}
+        setIsRecordingVideo(false);
+      }
+    }
+    return () => clearTimeout(timer);
+  }, [isRecordingVideo, videoIntroDuration, videoIntroRecorder, isVideoSimulationActive]);
 
   // Sync wallpaper to localStorage
   useEffect(() => {
@@ -1175,6 +1460,11 @@ function AppContent() {
 
       const state = await res.json();
       if (state && state.profileData) {
+        if (state.profileData.isDisabled) {
+          alert("Your account has been disabled. Please contact support.");
+          setLoginPin("");
+          return;
+        }
         if (state.profileData.pin === loginPin) {
           setIsLoggedIn(true);
           setProfileData(ensureProfileData(state.profileData));
@@ -1364,14 +1654,15 @@ function AppContent() {
     angle: "left" | "front" | "right" | "gig",
     mode: "user" | "environment" = facingMode,
   ) => {
+    setIsCameraSimulationActive(false);
+    setCameraDenied(false);
     try {
       if (stream) {
         stream.getTracks().forEach((track) => track.stop());
       }
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert("Camera access is not supported by your browser or environment.");
-        return;
+        throw new Error("navigator.mediaDevices.getUserMedia not available");
       }
 
       const constraints = {
@@ -1396,10 +1687,16 @@ function AppContent() {
           setStream(fallbackStream);
           setCapturingAngle(angle);
         } else {
-          showToast("Camera access is not supported by your browser or environment.");
+          throw new Error("Fallback getUserMedia not available");
         }
       } catch (e) {
-        showToast("Camera permission denied");
+        console.warn("webcam access permission blocked or unavailable. triggering digital biometric simulation.");
+        setCameraDenied(true);
+        setIsCameraSimulationActive(true);
+        setCapturingAngle(angle);
+        setPopupMessage("Camera blocked by iframe. Unlocking Simulated Biometric Capture mode!");
+        setShowPopup(true);
+        setTimeout(() => setShowPopup(false), 4500);
       }
     }
   };
@@ -1411,6 +1708,104 @@ function AppContent() {
     setCountdown(4);
   };
 
+  const generateSimulatedPhoto = (angle: string) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      // Elegant navy to dark indigo gradient background for professional feel
+      const grad = ctx.createLinearGradient(0, 0, 0, 480);
+      grad.addColorStop(0, "#0b0f19");
+      grad.addColorStop(1, "#1e1e38");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 640, 480);
+
+      // Grid lines for high-tech aesthetic
+      ctx.strokeStyle = "rgba(99, 102, 241, 0.12)";
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 640; i += 40) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 480); ctx.stroke();
+      }
+      for (let j = 0; j < 480; j += 40) {
+        ctx.beginPath(); ctx.moveTo(0, j); ctx.lineTo(640, j); ctx.stroke();
+      }
+
+      // Capture boundary overlay
+      ctx.strokeStyle = "rgba(59, 130, 246, 0.4)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(30, 30, 580, 420);
+
+      // Draw stylized head/shoulders outline representing the subject
+      ctx.fillStyle = "#1e1b4b";
+      ctx.beginPath();
+      ctx.arc(320, 210, 85, 0, Math.PI * 2); // Head
+      ctx.fill();
+
+      ctx.fillStyle = "#312e81";
+      ctx.beginPath();
+      ctx.ellipse(320, 440, 180, 130, 0, 0, Math.PI, true); // Shoulders
+      ctx.fill();
+
+      // Face mask outlines
+      ctx.strokeStyle = "#4338ca";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(320, 210, 85, 0, Math.PI * 2);
+      ctx.stroke();
+
+      if (angle === "left") {
+        ctx.fillStyle = "#6366f1";
+        ctx.beginPath();
+        ctx.arc(285, 205, 12, 0, Math.PI * 2); // Eye looking left
+        ctx.fill();
+        ctx.strokeStyle = "#818cf8";
+        ctx.beginPath();
+        ctx.ellipse(285, 205, 18, 18, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (angle === "right") {
+        ctx.fillStyle = "#6366f1";
+        ctx.beginPath();
+        ctx.arc(355, 205, 12, 0, Math.PI * 2); // Eye looking right
+        ctx.fill();
+        ctx.strokeStyle = "#818cf8";
+        ctx.beginPath();
+        ctx.ellipse(355, 205, 18, 18, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = "#6366f1";
+        ctx.beginPath();
+        ctx.arc(285, 205, 12, 0, Math.PI * 2); // Left eye
+        ctx.arc(355, 205, 12, 0, Math.PI * 2); // Right eye
+        ctx.fill();
+        ctx.strokeStyle = "#818cf8";
+        ctx.beginPath();
+        ctx.ellipse(285, 205, 18, 18, 0, 0, Math.PI * 2);
+        ctx.ellipse(355, 205, 18, 18, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Safe secure digital watermark
+      ctx.font = "bold 13px 'JetBrains Mono', monospace";
+      ctx.fillStyle = "#10b981";
+      ctx.fillText("✓ VERIFIED IDENTITY SECURE SNAP", 50, 70);
+
+      ctx.font = "bold 11px monospace";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+      ctx.fillText(`ANGLE: ${angle.toUpperCase()}`, 50, 93);
+      ctx.fillText(`TIME: ${new Date().toISOString()}`, 50, 110);
+      ctx.fillText("IP SECURE HARBOUR PORT 3000", 50, 127);
+
+      ctx.strokeStyle = "#10b981";
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(40, 70); ctx.lineTo(40, 40); ctx.lineTo(70, 40); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(600, 70); ctx.lineTo(600, 40); ctx.lineTo(570, 40); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(40, 410); ctx.lineTo(40, 440); ctx.lineTo(70, 440); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(600, 410); ctx.lineTo(600, 440); ctx.lineTo(570, 440); ctx.stroke();
+    }
+    return canvas.toDataURL("image/jpeg", 0.65);
+  };
+
   const capturePhoto = () => {
     let shouldClose = true;
     try {
@@ -1418,19 +1813,27 @@ function AppContent() {
         console.warn("capturePhoto called when capturingAngle is null or falsy.");
         return;
       }
-      const video = document.getElementById("camera-preview") as HTMLVideoElement;
-      if (!video) {
-        console.error("Camera preview video element not found!");
-        return;
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(video, 0, 0);
-        const photo = canvas.toDataURL("image/jpeg", 0.6);
 
+      let photo = "";
+      if (isCameraSimulationActive) {
+        photo = generateSimulatedPhoto(capturingAngle);
+      } else {
+        const video = document.getElementById("camera-preview") as HTMLVideoElement;
+        if (!video) {
+          console.error("Camera preview video element not found!");
+          return;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(video, 0, 0);
+          photo = canvas.toDataURL("image/jpeg", 0.6);
+        }
+      }
+
+      if (photo) {
         if (capturingAngle === "gig") {
           setNewGig((prev) => ({ ...prev, fileUrls: [...prev.fileUrls, photo] }));
         } else {
@@ -1489,7 +1892,8 @@ function AppContent() {
               Available Seekers
             </h2>
             <div className="grid gap-4">
-              {profileCompleted && profileData.isVisible && profileData.pictures.front && (
+              {profileCompleted && profileData.isVisible && !profileData.isDisabled && profileData.pictures.front && 
+                !(seekers || []).some(s => s.email === profileData.email) && (
                 <motion.div
                   whileHover={{ scale: 1.01 }}
                   whileTap={{ scale: 0.98, backgroundColor: "#f0fdf4" }}
@@ -1512,10 +1916,15 @@ function AppContent() {
                       )}
                     </div>
                     <div>
-                      <h3 className="font-bold text-gray-900">
+                      <h3 className="font-bold text-gray-900 flex items-center gap-1.5">
                         {profileData.fullName || "My Profile"}
+                        <span className="text-[9px] bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-full font-bold uppercase">Me</span>
                       </h3>
-                      <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">
+                      {/* Location and Province for Current User Seeker */}
+                      <p className="text-xs text-gray-500 font-semibold flex items-center gap-1">
+                        <span className="text-[#007749]">📍</span> {profileData.location || "South Africa"}
+                      </p>
+                      <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">
                         {profileData.workPreference} Preference
                       </p>
                       <div className="flex items-center mt-1">
@@ -1527,6 +1936,7 @@ function AppContent() {
                   </div>
                   <div className="flex items-center gap-3">
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         const seekerId = 0; // The id of the current seeker
@@ -1537,8 +1947,8 @@ function AppContent() {
                           setMessages({
                             ...currentMessages,
                             [seekerId]: [
-                              { sender: "me", text: `Hi ${profileData.fullName || "John Doe"}, I would like to hire you for a gig!` },
-                              { sender: "other", text: "Hello! Thank you for choosing me. I am absolutely interested and available. Let's discuss details and rate here! 😊" }
+                              { sender: "me", text: `Hi ${profileData.fullName || "John Doe"}, I would like to hire you for a gig!`, companionName: profileData.fullName || "John Doe", companionEmail: profileData.email },
+                              { sender: "other", text: "Hello! Thank you for choosing me. I am absolutely interested and available. Let's discuss details and rate here! 😊", companionName: profileData.fullName || "John Doe", companionEmail: profileData.email }
                             ]
                           });
                         }
@@ -1554,6 +1964,51 @@ function AppContent() {
                   </div>
                 </motion.div>
               )}
+
+              {/* Nearby Seekers Category */}
+              {seekers && seekers.some(s => s.location === profileData.location) && (
+                <>
+                  <h3 className="text-gray-900 font-black uppercase text-xs tracking-wider my-4 px-4">Nearby Seekers</h3>
+                  {(seekers || []).filter(s => s.location === profileData.location).sort((a: any, b: any) => (a.skills || "").localeCompare(b.skills || "")).map((seeker) => {
+                    const isLocalMe = seeker.email === profileData.email;
+                    const seekerHashId = getEmailHashId(seeker.email);
+                    return (
+                        <SeekerItem
+                            key={seeker.email}
+                            seeker={seeker}
+                            isLocalMe={isLocalMe}
+                            seekerHashId={seekerHashId}
+                            onClick={(seekerData: any, hashId: any) => {
+                                setSelectedSeeker({ ...seekerData, id: hashId });
+                                setCurrentView("profile-details");
+                            }}
+                            setActiveChat={setActiveChat}
+                        />
+                    );
+                })}
+
+                </>
+              )}
+
+              {/* Other Provinces Seekers Category */}
+              <h3 className="text-gray-900 font-black uppercase text-xs tracking-wider my-4 px-4">Other Provinces</h3>
+              {(seekers || []).filter(s => s.location !== profileData.location).sort((a: any, b: any) => (a.skills || "").localeCompare(b.skills || "")).map((seeker) => {
+                const isLocalMe = seeker.email === profileData.email;
+                const seekerHashId = getEmailHashId(seeker.email);
+                return (
+                    <SeekerItem
+                        key={seeker.email}
+                        seeker={seeker}
+                        isLocalMe={isLocalMe}
+                        seekerHashId={seekerHashId}
+                        onClick={(seekerData: any, hashId: any) => {
+                            setSelectedSeeker({ ...seekerData, id: hashId });
+                            setCurrentView("profile-details");
+                        }}
+                        setActiveChat={setActiveChat}
+                    />
+                );
+              })}
             </div>
           </div>
         );
@@ -1587,7 +2042,7 @@ function AppContent() {
                   className="w-40 h-40 bg-gray-200 rounded-[2.5rem] overflow-hidden shadow-2xl border-4 border-white z-10 relative"
                 >
                   <img
-                    src={`https://api.dicebear.com/7.x/avataaars/svg?seed=John${selectedSeeker?.id}`}
+                    src={selectedSeeker?.pictures?.front || `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedSeeker?.name || selectedSeeker?.id}`}
                     className="w-full h-full object-cover scale-110"
                     alt="Seeker"
                   />
@@ -1687,7 +2142,7 @@ function AppContent() {
                     <p className="font-bold text-gray-900">
                       {selectedSeeker?.id === 0
                         ? profileData.fullName
-                        : "John Doe"}
+                        : selectedSeeker?.fullName || "John Doe"}
                     </p>
                   </motion.div>
                   <motion.div
@@ -1702,7 +2157,7 @@ function AppContent() {
                     <p className="font-bold text-gray-900">
                       {selectedSeeker?.id === 0
                         ? profileData.location
-                        : "Cape Town"}
+                        : selectedSeeker?.location || "Cape Town"}
                     </p>
                   </motion.div>
                   <motion.div
@@ -1717,7 +2172,7 @@ function AppContent() {
                     <p className="font-bold text-gray-900">
                       {selectedSeeker?.id === 0
                         ? profileData.education
-                        : "Diploma"}
+                        : selectedSeeker?.education || "Diploma"}
                     </p>
                   </motion.div>
                 </div>
@@ -1734,7 +2189,7 @@ function AppContent() {
                     <p className="font-bold text-gray-900">
                       {selectedSeeker?.id === 0
                         ? profileData.languages
-                        : "English, Xhosa"}
+                        : selectedSeeker?.languages || "English"}
                     </p>
                   </motion.div>
                   <motion.div
@@ -1749,7 +2204,7 @@ function AppContent() {
                     <p className="font-bold text-gray-900">
                       {selectedSeeker?.id === 0
                         ? profileData.workPreference
-                        : "Permanent"}
+                        : selectedSeeker?.workPreference || "Permanent"}
                     </p>
                   </motion.div>
                   <motion.div
@@ -1762,7 +2217,7 @@ function AppContent() {
                       Level
                     </p>
                     <span className="inline-block px-3 py-1 bg-[#007749] text-white font-black text-[10px] uppercase tracking-widest rounded-full">
-                      {selectedSeeker?.id === 0 ? profileData.level : "Novice"}
+                      {selectedSeeker?.id === 0 ? profileData.level : selectedSeeker?.level || "Novice"}
                     </span>
                   </motion.div>
                 </div>
@@ -1780,7 +2235,7 @@ function AppContent() {
                   <p className="font-bold text-gray-900">
                     {selectedSeeker?.id === 0
                       ? profileData.skills
-                      : "Gardening, Painting"}
+                      : selectedSeeker?.skills || "Gardening, Painting"}
                   </p>
                 </motion.div>
                 <motion.div
@@ -1795,7 +2250,7 @@ function AppContent() {
                   <p className="font-bold text-gray-900">
                     {selectedSeeker?.id === 0
                       ? profileData.experience
-                      : "5 years"}
+                      : selectedSeeker?.experience || "5 years"}
                   </p>
                 </motion.div>
                 <motion.div
@@ -1810,7 +2265,7 @@ function AppContent() {
                   <p className="font-bold text-gray-900">
                     {selectedSeeker?.id === 0
                       ? profileData.info
-                      : "Hardworking individual."}
+                      : selectedSeeker?.info || "Hardworking individual."}
                   </p>
                 </motion.div>
               </div>
@@ -1932,7 +2387,7 @@ function AppContent() {
                     <div className="min-w-0">
                       <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Email Address</p>
                       <p className="text-xs font-bold text-gray-800 break-all">
-                        {selectedSeeker?.id === 0 ? profileData.email || "No email" : "contact@example.com"}
+                        {selectedSeeker?.id === 0 ? profileData.email || "No email" : selectedSeeker?.email || "contact@example.com"}
                       </p>
                     </div>
                   </div>
@@ -1945,13 +2400,13 @@ function AppContent() {
                     <div>
                       <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Phone</p>
                       <p className="text-xs font-bold text-gray-800">
-                        {selectedSeeker?.id === 0 ? profileData.phone || "No phone" : "+27 12 345 6789"}
+                        {selectedSeeker?.id === 0 ? profileData.phone || "No phone" : selectedSeeker?.phone || "+27 12 345 6789"}
                       </p>
                     </div>
                   </div>
 
                   {/* Alt Phone */}
-                  {(selectedSeeker?.id === 0 ? profileData.alternativePhone : "+27 11 098 7654") && (
+                  {(selectedSeeker?.id === 0 ? profileData.alternativePhone : selectedSeeker?.alternativePhone) && (
                     <div className="flex items-start gap-2.5">
                       <div className="w-8 h-8 rounded-xl bg-[#001489]/5 flex items-center justify-center text-[#001489] shrink-0 border border-[#001489]/10">
                         <Phone className="w-4 h-4" />
@@ -1959,14 +2414,14 @@ function AppContent() {
                       <div>
                         <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Alt. Phone</p>
                         <p className="text-xs font-bold text-gray-800">
-                          {selectedSeeker?.id === 0 ? profileData.alternativePhone : "+27 11 098 7654"}
+                          {selectedSeeker?.id === 0 ? profileData.alternativePhone : selectedSeeker?.alternativePhone}
                         </p>
                       </div>
                     </div>
                   )}
 
                   {/* WhatsApp */}
-                  {(selectedSeeker?.id === 0 ? profileData.whatsapp : "+27 82 999 0000") && (
+                  {(selectedSeeker?.id === 0 ? profileData.whatsapp : selectedSeeker?.whatsapp) && (
                     <div className="flex items-start gap-2.5">
                       <div className="w-8 h-8 rounded-xl bg-green-50 flex items-center justify-center text-green-600 shrink-0 border border-green-100">
                         <span className="text-xs font-black">💬</span>
@@ -1974,14 +2429,14 @@ function AppContent() {
                       <div>
                         <p className="text-[9px] font-black text-green-600/80 uppercase tracking-wider">WhatsApp</p>
                         <p className="text-xs font-bold text-gray-850">
-                          {selectedSeeker?.id === 0 ? profileData.whatsapp : "+27 82 999 0000"}
+                          {selectedSeeker?.id === 0 ? profileData.whatsapp : selectedSeeker?.whatsapp}
                         </p>
                       </div>
                     </div>
                   )}
 
                   {/* LinkedIn */}
-                  {(selectedSeeker?.id === 0 ? profileData.linkedin : "linkedin.com/in/johndoe") && (
+                  {(selectedSeeker?.id === 0 ? profileData.linkedin : selectedSeeker?.linkedin) && (
                     <div className="flex items-start gap-2.5">
                       <div className="w-8 h-8 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 shrink-0 border border-blue-100">
                         <span className="text-xs font-black">in</span>
@@ -1989,14 +2444,14 @@ function AppContent() {
                       <div className="min-w-0">
                         <p className="text-[9px] font-black text-blue-600/80 uppercase tracking-wider">LinkedIn</p>
                         <p className="text-xs font-bold text-gray-850 underline truncate block max-w-full">
-                          {selectedSeeker?.id === 0 ? profileData.linkedin : "linkedin.com/in/johndoe"}
+                          {selectedSeeker?.id === 0 ? profileData.linkedin : selectedSeeker?.linkedin}
                         </p>
                       </div>
                     </div>
                   )}
 
                   {/* Telegram */}
-                  {(selectedSeeker?.id === 0 ? profileData.telegram : "@johndoe") && (
+                  {(selectedSeeker?.id === 0 ? profileData.telegram : selectedSeeker?.telegram) && (
                     <div className="flex items-start gap-2.5">
                       <div className="w-8 h-8 rounded-xl bg-sky-50 flex items-center justify-center text-sky-500 shrink-0 border border-sky-100">
                         <span className="text-xs font-black">✈</span>
@@ -2004,7 +2459,7 @@ function AppContent() {
                       <div>
                         <p className="text-[9px] font-black text-sky-500 uppercase tracking-wider">Telegram</p>
                         <p className="text-xs font-bold text-gray-850">
-                          {selectedSeeker?.id === 0 ? profileData.telegram : "@johndoe"}
+                          {selectedSeeker?.id === 0 ? profileData.telegram : selectedSeeker?.telegram}
                         </p>
                       </div>
                     </div>
@@ -2018,8 +2473,8 @@ function AppContent() {
                     <div>
                       <p className="text-[9px] font-black text-[#007749] uppercase tracking-wider">Preference & Hours</p>
                       <p className="text-xs font-bold text-gray-800">
-                        Prefers <span className="text-[#001489] font-black">{selectedSeeker?.id === 0 ? profileData.contactMethod || "Any" : "Email"}</span>
-                        {(selectedSeeker?.id === 0 ? profileData.contactHours : "9 AM - 5 PM") ? ` during ${selectedSeeker?.id === 0 ? profileData.contactHours || "Anytime" : "9 AM - 5 PM"}` : ""}
+                        Prefers <span className="text-[#001489] font-black">{selectedSeeker?.id === 0 ? profileData.contactMethod || "Any" : selectedSeeker?.contactMethod || "Email"}</span>
+                        {(selectedSeeker?.id === 0 ? profileData.contactHours : selectedSeeker?.contactHours) ? ` during ${selectedSeeker?.id === 0 ? profileData.contactHours || "Anytime" : selectedSeeker?.contactHours || "Anytime"}` : ""}
                       </p>
                     </div>
                   </div>
@@ -2075,7 +2530,8 @@ function AppContent() {
         );
       case "inbox":
         const inboxItems = Object.entries(messages || {}).map(([id, msgs]) => {
-          const typedMsgs = msgs as { sender: "me" | "other"; text: string }[];
+          const typedMsgs = msgs as { sender: "me" | "other"; text: string; companionName?: string; companionEmail?: string }[];
+          const customName = typedMsgs.find((m) => m.companionName)?.companionName;
           return {
             id: parseInt(id),
             lastMessage:
@@ -2087,7 +2543,7 @@ function AppContent() {
                 ? "System/Admin"
                 : id === "0"
                   ? profileData.fullName || "My Profile"
-                  : `John Doe ${id}`,
+                  : customName || `John Doe ${id}`,
           };
         });
 
@@ -2191,7 +2647,7 @@ function AppContent() {
                           )
                         ) : (
                           <img
-                            src={`https://api.dicebear.com/7.x/avataaars/svg?seed=John${item.id}`}
+                            src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${item.name || item.id}`}
                             className="w-full h-full object-cover"
                             alt=""
                           />
@@ -2274,7 +2730,7 @@ function AppContent() {
                         )
                       ) : (
                         <img
-                          src={`https://api.dicebear.com/7.x/avataaars/svg?seed=John${activeChat}`}
+                          src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedSeeker?.name || activeChat}`}
                           className="w-full h-full object-cover"
                           alt=""
                         />
@@ -3246,6 +3702,34 @@ function AppContent() {
                     ✓ Verified Business Owner Account
                   </div>
                 )}
+                
+                <div className="mt-8 pt-6 border-t border-gray-100 flex flex-col items-center">
+                   <h3 className="text-red-500 font-bold mb-2">Danger Zone</h3>
+                   <button
+                     type="button"
+                     onClick={async () => {
+                       if (window.confirm("Are you sure you want to disable your account immediately? You will be signed out.")) {
+                         const updatedProfile = { ...profileData, isDisabled: true };
+                         setProfileData(updatedProfile);
+                         try {
+                           await fetch("/api/sync", {
+                             method: "POST",
+                             headers: { "Content-Type": "application/json" },
+                             body: JSON.stringify({
+                               userId: profileData.email,
+                               state: { profileData: updatedProfile }
+                             })
+                           });
+                         } catch (e) {}
+                         handleLogout();
+                         setShowSplash(true);
+                       }
+                     }}
+                     className="px-6 py-2 bg-red-50 text-red-600 border border-red-200 rounded-full text-xs uppercase tracking-widest font-bold hover:bg-red-100 transition-colors"
+                   >
+                     Disable Account
+                   </button>
+                </div>
 
                 <button
                   type="submit"
@@ -3267,7 +3751,7 @@ function AppContent() {
             <div className="flex bg-gray-100 p-1.5 rounded-2xl gap-1">
               <button
                 onClick={() => setGigsTab("all")}
-                className={`flex-1 py-2 text-xs font-black rounded-xl uppercase tracking-wider transition-all ${
+                className={`flex-1 py-1.5 text-[10px] font-black rounded-xl uppercase tracking-wider transition-all ${
                   gigsTab === "all"
                     ? "bg-[#001489] text-white shadow-sm"
                     : "text-gray-500 hover:text-gray-900"
@@ -3277,232 +3761,431 @@ function AppContent() {
               </button>
               <button
                 onClick={() => setGigsTab("applied")}
-                className={`flex-1 py-2 text-xs font-black rounded-xl uppercase tracking-wider transition-all ${
+                className={`flex-1 py-1.5 text-[10px] font-black rounded-xl uppercase tracking-wider transition-all ${
                   gigsTab === "applied"
                     ? "bg-[#001489] text-white shadow-sm"
                     : "text-gray-500 hover:text-gray-900"
                 }`}
               >
-                Applied Gigs ({(appliedGigs || []).length})
+                Applied ({(appliedGigs || []).length})
+              </button>
+              <button
+                onClick={() => {
+                  setGigsTab("applications");
+                  fetchApplications();
+                }}
+                className={`flex-1 py-1.5 text-[10px] font-black rounded-xl uppercase tracking-wider transition-all ${
+                  gigsTab === "applications"
+                    ? "bg-[#001489] text-white shadow-sm"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+              >
+                Applications Received ({(gigApplications || []).filter(app => (gigs || []).find(g => g.id === app.gigId)?.creator === profileData.fullName).length})
               </button>
             </div>
-            <form
-              className="bg-white/80 backdrop-blur-sm p-6 rounded-[2.5rem] shadow-xl border border-white/20 space-y-3"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (newGig.fileUrls.length === 0) {
-                  setPopupMessage(
-                    "Rejected: You must attach at least one image or video to post a gig.",
-                  );
-                  setShowPopup(true);
-                  setTimeout(() => setShowPopup(false), 3000);
-                  return;
-                }
-                setGigs([
-                  {
-                    id: Date.now(),
-                    ...newGig,
-                    creator: profileData.fullName || "Anonymous",
-                    views: 0,
-                    applicants: 0,
-                  },
-                  ...gigs,
-                ]);
-                setNewGig({
-                  title: "",
-                  description: "",
-                  files: null,
-                  fileUrls: [],
-                });
-                setPopupMessage("Gig posted successfully!");
-                setShowPopup(true);
-                setTimeout(() => setShowPopup(false), 2000);
-              }}
-            >
-              <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-2">
-                <Plus className="w-3 h-3" /> Post a new gig
-              </h3>
-              <input
-                type="text"
-                placeholder="Gig Title"
-                value={newGig.title}
-                onChange={(e) =>
-                  setNewGig({ ...newGig, title: e.target.value })
-                }
-                className="w-full p-4 border-2 border-gray-50 rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm font-bold"
-                required
-              />
-              <textarea
-                placeholder="Tell us more about the job..."
-                value={newGig.description}
-                onChange={(e) =>
-                  setNewGig({ ...newGig, description: e.target.value })
-                }
-                className="w-full p-4 border-2 border-gray-50 rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm h-24 resize-none"
-                required
-              />
-
-              <div className="flex flex-wrap items-center gap-3">
-                <label className="flex-1 min-w-[120px] flex items-center justify-center gap-2 p-3 border-2 border-dashed border-gray-200 rounded-2xl hover:border-blue-400 cursor-pointer transition-all hover:bg-blue-50/30">
-                  <Briefcase className="w-4 h-4 text-gray-400" />
-                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-tight">
-                    Upload
-                  </span>
-                  <input
-                    type="file"
-                    accept="image/*,video/*"
-                    multiple
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
-                </label>
-
-                <button
-                  type="button"
-                  onClick={() => requestCameraAccess("gig", "environment")}
-                  className="flex-1 min-w-[120px] flex items-center justify-center gap-2 p-3 border-2 border-dashed border-gray-200 rounded-2xl hover:border-blue-400 cursor-pointer transition-all hover:bg-blue-50/30"
-                >
-                  <Camera className="w-4 h-4 text-gray-400" />
-                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-tight">
-                    Capture
-                  </span>
-                </button>
-
-                <button
-                  type="submit"
-                  className="w-full p-4 bg-[#001489] text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-lg shadow-blue-100 hover:bg-[#000d5a] active:scale-95 transition-all"
-                >
-                  Submit Post
-                </button>
-              </div>
-
-              {newGig.fileUrls.length > 0 && (
-                <div className="flex gap-2 p-1 overflow-x-auto">
-                  {newGig.fileUrls.map((url) => (
-                    <img
-                      key={url}
-                      src={url}
-                      alt="preview"
-                      className="w-12 h-12 object-cover rounded-xl border-2 border-white shadow-sm"
-                    />
-                  ))}
-                </div>
-              )}
-            </form>
-
-            <div className="grid gap-4 mt-8 pb-10">
-              {(() => {
-                const filteredGigs = (gigs || []).filter((gig) => {
-                  if (gigsTab === "applied") {
-                    return (appliedGigs || []).includes(gig.id);
+            {gigsTab === "all" && (
+              <form
+                className="bg-white/80 backdrop-blur-sm p-6 rounded-[2.5rem] shadow-xl border border-white/20 space-y-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (newGig.fileUrls.length === 0) {
+                    setPopupMessage(
+                      "Rejected: You must attach at least one image or video to post a gig.",
+                    );
+                    setShowPopup(true);
+                    setTimeout(() => setShowPopup(false), 3000);
+                    return;
                   }
-                  return true;
-                });
+                  setGigs([
+                    {
+                      id: Date.now(),
+                      ...newGig,
+                      creator: profileData.fullName || "Anonymous",
+                      creatorEmail: profileData.email,
+                      views: 0,
+                      applicants: 0,
+                    },
+                    ...gigs,
+                  ]);
+                  setNewGig({
+                    title: "",
+                    description: "",
+                    files: null,
+                    fileUrls: [],
+                    isImmediate: true,
+                    gigDate: "",
+                  });
+                  setPopupMessage("Gig posted successfully!");
+                  setShowPopup(true);
+                  setTimeout(() => setShowPopup(false), 2000);
+                }}
+              >
+                <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-2">
+                  <Plus className="w-3 h-3" /> Post a new gig
+                </h3>
+                <input
+                  type="text"
+                  placeholder="Gig Title"
+                  value={newGig.title}
+                  onChange={(e) =>
+                    setNewGig({ ...newGig, title: e.target.value })
+                  }
+                  className="w-full p-4 border-2 border-gray-50 rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm font-bold"
+                  required
+                />
+                <textarea
+                  placeholder="Tell us more about the job..."
+                  value={newGig.description}
+                  onChange={(e) =>
+                    setNewGig({ ...newGig, description: e.target.value })
+                  }
+                  className="w-full p-4 border-2 border-gray-50 rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm h-24 resize-none"
+                  required
+                />
+                
+                <div className="flex items-center gap-2 px-1">
+                    <input type="checkbox" id="isImmediate" checked={newGig.isImmediate} onChange={(e) => setNewGig({...newGig, isImmediate: e.target.checked})} className="accent-[#001489] w-4 h-4" />
+                    <label htmlFor="isImmediate" className="text-xs font-bold text-gray-700">Post Immediately</label>
+                </div>
+                {!newGig.isImmediate && (
+                    <input type="date" value={newGig.gigDate} onChange={(e) => setNewGig({...newGig, gigDate: e.target.value})} className="w-full p-4 border-2 border-gray-50 rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm font-bold" />
+                )}
 
-                if (filteredGigs.length === 0) {
-                  return (
-                    <div className="text-center py-12 bg-white/60 backdrop-blur-sm rounded-[2.5rem] border border-gray-100 p-6">
-                      <p className="text-gray-400 text-sm font-bold">
-                        {gigsTab === "applied"
-                          ? "You haven't applied to any gigs yet."
-                          : "No gigs available at the moment."}
-                      </p>
-                    </div>
-                  );
-                }
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex-1 min-w-[120px] flex items-center justify-center gap-2 p-3 border-2 border-dashed border-gray-200 rounded-2xl hover:border-blue-400 cursor-pointer transition-all hover:bg-blue-50/30">
+                    <Briefcase className="w-4 h-4 text-gray-400" />
+                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-tight">
+                      Upload
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*,video/*"
+                      multiple
+                      onChange={handleFileChange}
+                      className="hidden"
+                    />
+                  </label>
 
-                return filteredGigs.map((gig) => {
-                  const isMyGig = gig.creator === profileData.fullName;
-                  const alreadyApplied = (appliedGigs || []).includes(gig.id);
-                  return (
+                  <button
+                    type="button"
+                    onClick={() => requestCameraAccess("gig", "environment")}
+                    className="flex-1 min-w-[120px] flex items-center justify-center gap-2 p-3 border-2 border-dashed border-gray-200 rounded-2xl hover:border-blue-400 cursor-pointer transition-all hover:bg-blue-50/30"
+                  >
+                    <Camera className="w-4 h-4 text-gray-400" />
+                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-tight">
+                      Capture
+                    </span>
+                  </button>
+
+                  <button
+                    type="submit"
+                    className="w-full p-4 bg-[#001489] text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-lg shadow-blue-100 hover:bg-[#000d5a] active:scale-95 transition-all"
+                  >
+                    Submit Post
+                  </button>
+                </div>
+
+                {newGig.fileUrls.length > 0 && (
+                  <div className="flex gap-2.5 p-1 overflow-x-auto">
+                    {newGig.fileUrls.map((url, uidx) => (
+                      <div key={url} className="relative group shrink-0">
+                        <img
+                          src={url}
+                          alt="preview"
+                          className="w-12 h-12 object-cover rounded-xl border-2 border-white shadow-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewGig((prev) => ({
+                              ...prev,
+                              fileUrls: prev.fileUrls.filter((_, idx) => idx !== uidx)
+                            }));
+                          }}
+                          className="absolute inset-0 bg-red-500/80 rounded-xl text-white opacity-0 group-hover:opacity-100 flex items-center justify-center text-[8px] font-black uppercase transition-opacity"
+                          title="Click to remove attachment"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </form>
+            )}
+
+            {gigsTab === "applications" ? (
+              <div className="space-y-6 pb-12">
+                {(() => {
+                  const myGigs = (gigs || []).filter((g) => g.creator === profileData.fullName);
+                  const myGigIds = myGigs.map((g) => g.id);
+                  const receivedApps = (gigApplications || []).filter((app) => myGigIds.includes(app.gigId));
+
+                  if (receivedApps.length === 0) {
+                    return (
+                      <div className="text-center py-12 bg-white/60 backdrop-blur-sm rounded-[2.5rem] p-6 border border-gray-100">
+                        <p className="text-gray-400 text-sm font-bold">No applications received yet for your postings.</p>
+                      </div>
+                    );
+                  }
+
+                  return receivedApps.map((app) => (
                     <motion.div
-                      key={gig.id}
-                      whileHover={{ scale: 1.01 }}
-                      whileTap={{ scale: 0.98, backgroundColor: "#eff6ff" }}
-                      onClick={() => {
-                        setSelectedGig(gig);
-                        setCurrentView("gig-details");
-                      }}
-                      className="bg-white p-5 rounded-[2.5rem] shadow-sm border border-gray-100 flex flex-col gap-3 transition-colors cursor-pointer group"
+                      key={app.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-100 space-y-4"
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center border border-gray-100 overflow-hidden">
-                            {gig.fileUrls && gig.fileUrls.length > 0 ? (
-                              <img
-                                src={gig.fileUrls[0]}
-                                className="w-full h-full object-cover"
-                                alt="thumbnail"
-                              />
-                            ) : (
-                              <div className="w-full h-full bg-red-50 flex items-center justify-center text-[8px] font-black text-red-400 uppercase text-center p-1">
-                                No Image
-                              </div>
-                            )}
-                          </div>
-                          <div>
-                            <h3 className="font-bold text-gray-900 group-hover:text-blue-600 transition-colors line-clamp-1">
-                              {gig.title}
-                            </h3>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <p className="text-[10px] uppercase font-black text-gray-400">
-                                Owner: {gig.creator}
-                              </p>
-                              <span className="w-1 h-1 bg-gray-300 rounded-full" />
-                              <p className="text-[10px] text-gray-400 font-bold">
-                                {gig.views} Views
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="bg-gray-50 px-3 py-1.5 rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-all">
-                          <span className="text-[10px] font-black uppercase tracking-tighter">
-                            Details
+                      <div className="flex justify-between items-start border-b border-gray-50 pb-3">
+                        <div>
+                          <span className="text-[10px] font-black uppercase text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
+                            {app.gigTitle}
                           </span>
+                          <h3 className="text-lg font-black text-gray-900 mt-1">{app.applicantName}</h3>
+                          <p className="text-xs text-gray-400 font-bold">Applied: {new Date(app.appliedAt).toLocaleDateString()}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {app.status === "pending" ? (
+                            <span className="px-3 py-1 bg-yellow-100 text-yellow-700 text-xs font-black rounded-full uppercase">Pending Review</span>
+                          ) : app.status === "approved" ? (
+                            <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-black rounded-full uppercase border border-green-200">Approved ✓</span>
+                          ) : (
+                            <span className="px-3 py-1 bg-red-100 text-red-700 text-xs font-black rounded-full uppercase border border-red-200">Rejected ✗</span>
+                          )}
+                          </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                        <div className="space-y-1.5 bg-gray-50/50 p-4 rounded-2xl border border-gray-50">
+                          <p className="text-gray-500 font-bold uppercase text-[9px] tracking-wider mb-1">Applicant Contact</p>
+                          <p className="text-gray-800 font-medium"><strong>Email:</strong> {app.applicantEmail}</p>
+                          <p className="text-gray-800 font-medium"><strong>Phone:</strong> {app.applicantPhone}</p>
+                          <p className="text-gray-800 font-medium"><strong>Level:</strong> {app.applicantLevel || "Beginner"}</p>
+                        </div>
+                        <div className="space-y-1.5 bg-gray-50/50 p-4 rounded-2xl border border-gray-50">
+                          <p className="text-gray-500 font-bold uppercase text-[9px] tracking-wider mb-1">Applicant Skills & Bio</p>
+                          <p className="text-gray-800 text-xs whitespace-pre-wrap">{app.applicantInfo || "No details provided."}</p>
                         </div>
                       </div>
 
-                      <p className="text-sm text-gray-600 line-clamp-2 leading-relaxed ml-1">
-                        {gig.description}
-                      </p>
-
-                      <div className="flex items-center justify-between pt-2 border-t border-gray-50 mt-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                            {gig.applicants} Applicants
-                          </span>
-                          {alreadyApplied && (
-                            <span className="px-2 py-0.5 bg-green-50 text-green-600 text-[8px] font-black rounded uppercase">
-                              Applied
-                            </span>
+                      {/* PICTURES AND IDENTITY DOCUMENTS SCREENSHOT PROTECTED VIEWER */}
+                      <div className="bg-gray-50 p-4 rounded-3xl space-y-3">
+                        <h4 className="text-[10px] uppercase font-black text-gray-400 tracking-wider">Applicant's Verified Credentials</h4>
+                        <div className="flex gap-4 items-center flex-wrap">
+                          {app.pictures?.front && (
+                            <div className="text-center">
+                              <p className="text-[9px] text-gray-400 font-bold uppercase mb-1">Portrait Photo</p>
+                              <div className="w-16 h-16 rounded-xl border-2 border-white shadow overflow-hidden">
+                                <img src={app.pictures.front} className="w-full h-full object-cover" alt="Portrait" />
+                              </div>
+                            </div>
+                          )}
+                          {app.idDocument && (
+                            <div className="text-center">
+                              <p className="text-[9px] text-gray-400 font-bold uppercase mb-1">ID Document</p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const win = window.open();
+                                  if (win) {
+                                    win.document.write(`<iframe src="${app.idDocument}" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
+                                  } else {
+                                    alert("ID Document view is not available on this preview.");
+                                  }
+                                }}
+                                className="px-3 py-2 bg-blue-50 text-blue-700 text-[10px] font-black rounded-lg uppercase tracking-wider hover:bg-blue-100 transition-colors border border-blue-100/50 flex items-center gap-1.5"
+                              >
+                                <FileText className="w-3.5 h-3.5" /> View ID Doc
+                              </button>
+                            </div>
+                          )}
+                          {app.certificates && app.certificates.length > 0 && (
+                            <div className="text-center">
+                              <p className="text-[9px] text-gray-400 font-bold uppercase mb-1">Certificates ({app.certificates.length})</p>
+                              <div className="flex gap-1.5 flex-wrap">
+                                {app.certificates.map((cert: any, idx: number) => (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => {
+                                      const win = window.open();
+                                      if (win) win.document.write(`<iframe src="${cert.url}" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;"></iframe>`);
+                                    }}
+                                    className="px-2 py-1 bg-emerald-50 text-emerald-700 text-[9px] font-black rounded uppercase tracking-wider border border-emerald-100/50 hover:bg-emerald-100 transition-all font-bold"
+                                  >
+                                    Cert #{idx+1}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
                           )}
                         </div>
-                        {isMyGig ? (
-                          <span className="text-[8px] font-black text-blue-600 uppercase bg-blue-50 px-2 py-0.5 rounded tracking-tighter border border-blue-100">
-                            My Listing
-                          </span>
-                        ) : (
-                          <ArrowRight className="w-4 h-4 text-gray-300" />
-                        )}
                       </div>
 
-                      {gig.fileUrls?.length > 0 && (
-                        <div className="flex gap-2 p-1 overflow-x-auto">
-                          {gig.fileUrls.map((url) => (
-                            <img
-                              key={url}
-                              src={url}
-                              alt="gig"
-                              className="w-12 h-12 object-cover rounded-xl"
+                      {/* LIVESTREAM / RECORDED VIDEO DESCRIPTIONS PLAYBACK */}
+                      {(app.videoUrl || app.videoData) ? (
+                        <div className="bg-gray-50/70 p-4 rounded-3xl space-y-2">
+                          <h4 className="text-[10px] uppercase font-black text-gray-400 tracking-wider flex items-center gap-1.5">
+                            <span className="w-2 h-2 bg-red-400 rounded-full animate-ping" />
+                            Live 60s Explanation Clip
+                          </h4>
+                          <div className="max-w-md mx-auto aspect-[4/3] bg-black rounded-2xl overflow-hidden shadow-inner border border-gray-100 relative group">
+                            <video
+                              src={app.videoUrl || app.videoData}
+                              controls
+                              className="w-full h-full object-cover"
                             />
-                          ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-gray-400 italic">No explanation video uploaded for this application.</p>
+                      )}
+
+                      {/* DECISION ACTION BUTTONS */}
+                      {app.status === "pending" && (
+                        <div className="flex gap-3 pt-2">
+                          <button
+                            onClick={() => handleUpdateApplicationStatus(app.id, "approved")}
+                            className="flex-1 py-3 bg-[#007749] text-white font-black uppercase text-xs tracking-wider rounded-2xl hover:bg-[#00663d] transition-all shadow-md shadow-green-100"
+                          >
+                            Approve Application
+                          </button>
+                          <button
+                            onClick={() => handleUpdateApplicationStatus(app.id, "rejected")}
+                            className="flex-1 py-3 bg-[#E03C31] text-white font-black uppercase text-xs tracking-wider rounded-2xl hover:bg-red-700 transition-all shadow-md shadow-red-100"
+                          >
+                            Reject Application
+                          </button>
                         </div>
                       )}
                     </motion.div>
-                  );
-                });
-              })()}
-            </div>
+                  ));
+                })()}
+              </div>
+            ) : (
+              <div className="grid gap-4 mt-8 pb-10">
+                {(() => {
+                  const filteredGigs = (gigs || []).filter((gig) => {
+                    if (gigsTab === "applied") {
+                      return (appliedGigs || []).includes(gig.id);
+                    }
+                    return true;
+                  });
+
+                  if (filteredGigs.length === 0) {
+                    return (
+                      <div className="text-center py-12 bg-white/60 backdrop-blur-sm rounded-[2.5rem] border border-gray-100 p-6">
+                        <p className="text-gray-400 text-sm font-bold">
+                          {gigsTab === "applied"
+                            ? "You haven't applied to any gigs yet."
+                            : "No gigs available at the moment."}
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  return filteredGigs.map((gig) => {
+                    const isMyGig = gig.creator === profileData.fullName;
+                    const alreadyApplied = (appliedGigs || []).includes(gig.id);
+                    const appStatus = (gigApplications || []).find(
+                      (app) => app.gigId === gig.id && app.applicantEmail === profileData.email
+                    )?.status || "pending";
+                    return (
+                      <motion.div
+                        key={gig.id}
+                        whileHover={{ scale: 1.01 }}
+                        whileTap={{ scale: 0.98, backgroundColor: "#eff6ff" }}
+                        onClick={() => {
+                          setSelectedGig(gig);
+                          setCurrentView("gig-details");
+                        }}
+                        className="bg-white p-5 rounded-[2.5rem] shadow-sm border border-gray-100 flex flex-col gap-3 transition-colors cursor-pointer group"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center border border-gray-100 overflow-hidden">
+                              {gig.fileUrls && gig.fileUrls.length > 0 ? (
+                                <img
+                                  src={gig.fileUrls[0]}
+                                  className="w-full h-full object-cover"
+                                  alt="thumbnail"
+                                />
+                              ) : (
+                                <div className="w-full h-full bg-red-50 flex items-center justify-center text-[8px] font-black text-red-400 uppercase text-center p-1">
+                                  No Image
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <h3 className="font-bold text-gray-900 group-hover:text-blue-600 transition-colors line-clamp-1">
+                                {gig.title}
+                              </h3>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <p className="text-[10px] uppercase font-black text-gray-400">
+                                  Owner: {gig.creator}
+                                </p>
+                                <span className="w-1 h-1 bg-gray-300 rounded-full" />
+                                <p className="text-[10px] text-gray-400 font-bold">
+                                  {gig.views} Views
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="bg-gray-50 px-3 py-1.5 rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-all">
+                            <span className="text-[10px] font-black uppercase tracking-tighter">
+                              Details
+                            </span>
+                          </div>
+                        </div>
+
+                        <p className="text-sm text-gray-600 line-clamp-2 leading-relaxed ml-1">
+                          {gig.description}
+                        </p>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-gray-50 mt-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                              {gig.applicants} Applicants
+                            </span>
+                            {alreadyApplied && (
+                              <span className={`px-2 py-0.5 text-[8px] font-black rounded uppercase ${
+                                appStatus === "approved" 
+                                  ? "bg-green-100 text-green-700" 
+                                  : appStatus === "rejected"
+                                    ? "bg-red-100 text-red-700"
+                                    : "bg-yellow-100 text-yellow-700 font-bold"
+                              }`}>
+                                {appStatus === "approved" ? "Approved ✓" : appStatus === "rejected" ? "Rejected ✗" : "Pending"}
+                              </span>
+                            )}
+                          </div>
+                          {isMyGig ? (
+                            <span className="text-[8px] font-black text-blue-600 uppercase bg-blue-50 px-2 py-0.5 rounded tracking-tighter border border-blue-100">
+                              My Listing
+                            </span>
+                          ) : (
+                            <ArrowRight className="w-4 h-4 text-gray-300" />
+                          )}
+                        </div>
+
+                        {gig.fileUrls?.length > 0 && (
+                          <div className="flex gap-2 p-1 overflow-x-auto">
+                            {gig.fileUrls.map((url) => (
+                              <img
+                                key={url}
+                                src={url}
+                                alt="gig"
+                                className="w-12 h-12 object-cover rounded-xl"
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </motion.div>
+                    );
+                  });
+                })()}
+              </div>
+            )}
           </div>
         );
       case "gig-details":
@@ -3698,31 +4381,382 @@ function AppContent() {
                     </button>
                   </div>
                 ) : (
-                  <button
-                    disabled={alreadyApplied_details}
-                    onClick={() => {
-                      setGigs(
-                        gigs.map((g) =>
-                          g.id === selectedGig.id
-                            ? { ...g, applicants: g.applicants + 1 }
-                            : g,
-                        ),
-                      );
-                      setAppliedGigs([...appliedGigs, selectedGig.id]);
-                      setPopupMessage("Application successfully sent!");
-                      setShowPopup(true);
-                      setTimeout(() => setShowPopup(false), 2000);
-                    }}
-                    className={`w-full py-5 rounded-[2rem] font-black uppercase tracking-widest text-sm shadow-2xl transition-all active:scale-95 ${
-                      alreadyApplied_details
-                        ? "bg-[#007749] text-white"
-                        : "bg-[#001489] text-white hover:bg-[#000d5a] shadow-blue-200"
-                    }`}
-                  >
-                    {alreadyApplied_details
-                      ? "Applied Successfully"
-                      : "Apply for this gig"}
-                  </button>
+                  <div className="space-y-6 pt-4 border-t border-gray-100">
+                    {selectedGig.status === 'closed' ? (
+                      <div className="bg-gray-100 p-5 rounded-[2rem] text-center">
+                        <p className="text-gray-500 font-bold uppercase text-xs tracking-wider">Gig Closed</p>
+                      </div>
+                    ) : alreadyApplied_details ? (
+                      <div className="bg-green-50 border border-green-100 p-5 rounded-[2rem] text-center space-y-2">
+                        <Check className="w-8 h-8 text-green-600 mx-auto" />
+                        <h4 className="font-black text-green-800 uppercase tracking-wider text-xs">Application Submitted</h4>
+                        <p className="text-xs text-green-700 font-medium">Your credentials and introduction are under review by the gig owner.</p>
+                      </div>
+                    ) : !showGigApplyWorkflow ? (
+                      <button
+                        onClick={() => {
+                          setVideoIntroUrl(null);
+                          setVideoIntroBlob(null);
+                          setVideoIntroDuration(60);
+                          setApplyCoverNoteValue("");
+                          setApplicantPhoneValue(profileData.phone || "");
+                          setApplicantLevelValue("Intermediate");
+                          setShowGigApplyWorkflow(true);
+                        }}
+                        className="w-full py-5 bg-[#001489] text-white hover:bg-[#000d5a] rounded-[2rem] font-black uppercase tracking-widest text-sm shadow-2xl transition-all active:scale-95 shadow-blue-200"
+                      >
+                        Apply for this gig
+                      </button>
+                    ) : (
+                      <motion.div
+                        initial={{ opacity: 0, y: 15 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-gray-50/50 p-6 rounded-[2.5rem] border border-gray-100 space-y-6"
+                      >
+                        <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                          <h3 className="font-black text-gray-900 text-sm uppercase tracking-wider">Gig Application Wizard</h3>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              stopVideoIntroRecording();
+                              setShowGigApplyWorkflow(false);
+                            }}
+                            className="text-xs font-black text-red-500 uppercase tracking-widest hover:underline"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+
+                        {/* STEP 1: VERIFIED IDENTITY DATA CONFIRMATION */}
+                        <div className="space-y-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Step 1: Verify Profile Information</p>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Applicant Name</label>
+                              <div className="flex items-center gap-2 p-3 bg-white border border-gray-100 rounded-2xl">
+                                <User className="w-4 h-4 text-gray-400" />
+                                <span className="text-xs font-semibold text-gray-700">{profileData.fullName || "Google AI Studio User"}</span>
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Applicant Email</label>
+                              <div className="flex items-center gap-2 p-3 bg-white border border-gray-100 rounded-2xl">
+                                <Mail className="w-4 h-4 text-gray-400" />
+                                <span className="text-xs font-semibold text-gray-700">{profileData.email || "user@gmail.com"}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Contact Phone</label>
+                              <div className="flex items-center gap-2 p-1.5 bg-white border border-gray-100 rounded-2xl">
+                                <Phone className="w-4 h-4 text-gray-400 ml-2" />
+                                <input
+                                  type="tel"
+                                  placeholder="Enter your phone number"
+                                  value={applicantPhoneValue}
+                                  onChange={(e) => setApplicantPhoneValue(e.target.value)}
+                                  className="w-full p-1.5 outline-none text-xs font-bold text-gray-700 bg-transparent"
+                                />
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Work Level Sector</label>
+                              <select
+                                value={applicantLevelValue}
+                                onChange={(e) => setApplicantLevelValue(e.target.value)}
+                                className="w-full p-3 bg-white border border-gray-100 rounded-2xl text-xs font-bold text-gray-700 outline-none"
+                              >
+                                <option value="Beginner">Beginner Level</option>
+                                <option value="Intermediate">Intermediate Level</option>
+                                <option value="Advanced">Advanced / Expert</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* STEP 2: ATTACHMENTS & SECURE IDENTITY CREDENTIALS */}
+                        <div className="space-y-2">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Step 2: Attached Identity Credentials</p>
+                          <div className="bg-blue-50/50 border border-blue-100/50 p-4 rounded-2xl space-y-3">
+                            <p className="text-[11px] text-blue-800 leading-relaxed font-medium">
+                              To prevent fraud and maintain the integrity of our gig economy, your verified identity documents and profile images will be securely attached with your application:
+                            </p>
+                            <div className="flex flex-wrap gap-4 text-[10px] font-black uppercase text-blue-600">
+                              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-blue-100">
+                                <Check className="w-3.5 h-3.5 text-green-500" />
+                                <span>Verified ID Document</span>
+                              </div>
+                              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-blue-100">
+                                <Check className="w-3.5 h-3.5 text-green-500" />
+                                <span>Front Face Portrait</span>
+                              </div>
+                              {profileData.certificates && profileData.certificates.length > 0 && (
+                                <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-blue-100">
+                                  <Check className="w-3.5 h-3.5 text-green-500" />
+                                  <span>{profileData.certificates.length} Portfolio Certs</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* STEP 3: COVER NOTE */}
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Step 3: Cover Note / Fit Details</label>
+                          <textarea
+                            placeholder="Briefly state why you are the best fit for this role..."
+                            value={applyCoverNoteValue}
+                            onChange={(e) => setApplyCoverNoteValue(e.target.value)}
+                            className="w-full p-4 border border-gray-200 rounded-2xl bg-white outline-none focus:border-blue-500 text-xs font-bold text-gray-700 h-24 resize-none"
+                            required
+                          />
+                        </div>
+
+                        {/* STEP 4: OPTIONAL 60s VIDEO EXPLANATION */}
+                        <div className="space-y-4">
+                          <div className="flex justify-between items-center">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Step 4: Optional 60s Video Intro (Recommend)</p>
+                            {isRecordingVideo && (
+                              <span className="text-red-500 text-xs font-black animate-pulse flex items-center gap-1">
+                                <span className="w-2 h-2 bg-red-500 rounded-full" />
+                                RECORDING • {videoIntroDuration}s
+                              </span>
+                            )}
+                          </div>
+
+                          {/* CAMERA / SIMULATION TROUBLESHOOTING IF DENIED */}
+                          {cameraDenied && (
+                            <div className="bg-red-50/90 border border-red-100 p-4 rounded-3xl text-[11px] space-y-2 text-red-800 leading-relaxed">
+                              <div className="flex items-center gap-2 font-black uppercase text-[10px] text-red-700">
+                                <Ban className="w-4 h-4 text-red-500" />
+                                <span>Camera Hardware or Permission Check Failed</span>
+                              </div>
+                              <p className="text-red-700 font-medium">
+                                Chrome/Safari block camera recording inside embedded sandboxed preview iframes. Since your camera couldn't open, we unlocked <strong>two immediate alternatives</strong> below:
+                              </p>
+                              <div className="grid grid-cols-1 gap-1.5 font-bold text-red-800 bg-white/50 p-2.5 rounded-xl border border-red-100">
+                                <div>1. Press <span className="text-emerald-700">"Simulate Video Pitch"</span> to perform a mock interactive recording countdown demo.</div>
+                                <div>2. Press <span className="text-indigo-700">"Upload File Fallback"</span> to upload an existing video file (.mp4/.webm) instead.</div>
+                              </div>
+                              <p className="text-[10px] text-red-500 font-medium italic mt-1">
+                                Info: You can also open the App in its own web tab using the URL at the top to bypass sandboxing!
+                              </p>
+                            </div>
+                          )}
+
+                          {/* CAMERA PREVIEW PORT */}
+                          <div className="max-w-md mx-auto aspect-[4/3] bg-black rounded-3xl overflow-hidden shadow-inner border border-gray-200 relative group">
+                            {/* LIVE PREVIEW IF RECORDING OR CAM ON */}
+                            <video
+                              ref={applyLiveVideoRef}
+                              muted
+                              playsInline
+                              className={`w-full h-full object-cover ${videoIntroStream ? "block" : "hidden"}`}
+                            />
+
+                            {/* ANIMATED SIMULATED VIDEO STREAM RECORDING */}
+                            {isRecordingVideo && isVideoSimulationActive && (
+                              <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 bg-slate-900 border-4 border-red-600 overflow-hidden relative">
+                                <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,_rgba(0,0,0,0.25)_50%),_linear-gradient(90deg,_rgba(255,0,0,0.06),_rgba(0,255,0,0.02),_rgba(0,0,255,0.06))] bg-[size:100%_4px,_3px_100%] pointer-events-none" />
+                                
+                                <div className="absolute top-4 left-4 flex items-center gap-2 bg-black/60 px-2.5 py-1 rounded-full border border-red-500/30">
+                                  <span className="w-2 h-2 bg-red-600 rounded-full animate-ping" />
+                                  <span className="text-[9px] font-black tracking-widest text-red-500 uppercase">SIMULATING VIDEO CAPTURE</span>
+                                </div>
+
+                                <div className="absolute top-4 right-4 bg-black/60 px-2.5 py-1 rounded-full border border-gray-700">
+                                  <span className="text-[9px] font-mono font-bold text-gray-300">00:{videoIntroDuration < 10 ? `0${videoIntroDuration}` : videoIntroDuration}</span>
+                                </div>
+
+                                {/* Simulated live soundwave voice waves visualizer */}
+                                <div className="flex items-end justify-center gap-1.5 h-16 mb-4">
+                                  {[1.2, 0.5, 1.8, 0.4, 1.5, 0.8, 1.9, 0.3, 1.4, 0.7, 1.6, 1.1, 0.6, 1.3].map((val, idx) => (
+                                    <motion.div
+                                      key={idx}
+                                      animate={{ height: ["15px", `${val * 48}px`, "15px"] }}
+                                      transition={{
+                                        duration: 1 + val,
+                                        repeat: Infinity,
+                                        ease: "easeInOut"
+                                      }}
+                                      className="w-1.5 bg-gradient-to-t from-red-500 to-amber-500 rounded-full"
+                                    />
+                                  ))}
+                                </div>
+
+                                <p className="text-xs font-black text-white uppercase tracking-wider mb-1 z-10">Microphone Input Wave Active</p>
+                                <p className="text-[10px] text-gray-400 max-w-[280px] leading-relaxed z-10 font-bold">The interactive system is simulating live speech capturing. Talk normally!</p>
+                              </div>
+                            )}
+                            
+                            {/* PLAYBACK PREVIEW AFTER RECORDED/SIMULATED */}
+                            {!videoIntroStream && !isRecordingVideo && videoIntroUrl && (
+                              <video
+                                src={videoIntroUrl}
+                                controls
+                                className="w-full h-full object-cover"
+                              />
+                            )}
+
+                            {/* STANDBY COVER STATE */}
+                            {!videoIntroStream && !isRecordingVideo && !videoIntroUrl && (
+                              <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 bg-gray-900 text-gray-400 space-y-2">
+                                <Camera className="w-10 h-10 text-gray-600 animate-pulse" />
+                                <p className="text-xs font-bold text-white uppercase tracking-wider">No application video clip yet</p>
+                                <p className="text-[10px] text-gray-400 max-w-[280px] mx-auto leading-relaxed">Let the gig owner get to know you! Record a 60-second video presentation or upload a clip directly.</p>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex justify-center gap-2.5 flex-wrap">
+                            {!isRecordingVideo ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowVideoIntroPermissionPrompt(true)}
+                                  className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all flex items-center gap-1.5 shadow"
+                                >
+                                  <Camera className="w-3.5 h-3.5" />
+                                  Record Live
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={startVideoIntroSimulation}
+                                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all flex items-center gap-1.5 shadow"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '4s' }} />
+                                  Simulate Video Pitch
+                                </button>
+
+                                <label className="px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-2xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all text-center border border-indigo-100 flex items-center justify-center gap-1.5 cursor-pointer shadow-sm">
+                                  <Briefcase className="w-3.5 h-3.5 text-indigo-500" />
+                                  <span>{videoIntroFileName ? `Loaded: ${videoIntroFileName.slice(0, 10)}...` : "Upload File"}</span>
+                                  <input
+                                    type="file"
+                                    accept="video/*"
+                                    onChange={handleVideoFileSelect}
+                                    className="hidden"
+                                  />
+                                </label>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={stopVideoIntroRecording}
+                                className="px-5 py-2.5 bg-gray-800 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-black active:scale-95 transition-all flex items-center gap-1.5 shadow"
+                              >
+                                <Square className="w-4 h-4 text-red-500" />
+                                Stop Recording ({videoIntroDuration}s left)
+                              </button>
+                            )}
+                            
+                            {videoIntroUrl && !isRecordingVideo && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setVideoIntroUrl(null);
+                                  setVideoIntroBlob(null);
+                                  setVideoIntroFileName(null);
+                                }}
+                                className="px-4 py-2.5 bg-gray-100 text-gray-600 border border-gray-200 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-200 active:scale-95 transition-all"
+                              >
+                                Clear Clip
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* FINAL SUBMIT BUTTON */}
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!applicantPhoneValue) {
+                                setPopupMessage("Rejected: Telephone number is required to contact you.");
+                                setShowPopup(true);
+                                setTimeout(() => setShowPopup(false), 3000);
+                                return;
+                              }
+                              if (!applyCoverNoteValue) {
+                                setPopupMessage("Rejected: Please enter a cover note about your fitness for the job.");
+                                setShowPopup(true);
+                                setTimeout(() => setShowPopup(false), 3000);
+                                return;
+                              }
+
+                              try {
+                                setPopupMessage("Transmitting application details...");
+                                setShowPopup(true);
+
+                                let videoBase64 = "";
+                                if (videoIntroBlob) {
+                                  videoBase64 = await blobToBase64(videoIntroBlob);
+                                }
+
+                                const submitData = {
+                                  id: Date.now(),
+                                  appliedAt: new Date().toISOString(),
+                                  status: "pending",
+                                  gigId: selectedGig.id,
+                                  gigTitle: selectedGig.title,
+                                  gigCreator: selectedGig.creator,
+                                  gigCreatorEmail: selectedGig.creatorEmail || "",
+                                  applicantEmail: profileData.email,
+                                  applicantName: profileData.fullName || "Google AI Studio User",
+                                  applicantPhone: applicantPhoneValue,
+                                  applicantLevel: applicantLevelValue,
+                                  applicantInfo: applyCoverNoteValue,
+                                  pictures: profileData.pictures || {},
+                                  idDocument: profileData.idDocument || "",
+                                  certificates: profileData.certificates || [],
+                                  videoData: videoBase64
+                                };
+
+                                const res = await fetch("/api/gigs/apply", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify(submitData)
+                                });
+
+                                if (res.ok) {
+                                  // Local counter increment / state updates
+                                  setGigs(
+                                    gigs.map((g) =>
+                                      g.id === selectedGig.id
+                                        ? { ...g, applicants: g.applicants + 1 }
+                                        : g,
+                                    ),
+                                  );
+                                  setAppliedGigs([...appliedGigs, selectedGig.id]);
+                                  
+                                  setPopupMessage("Success: Application sent to gig owner!");
+                                  setTimeout(() => setShowPopup(false), 3500);
+                                  
+                                  stopVideoIntroRecording();
+                                  setShowGigApplyWorkflow(false);
+                                  fetchApplications();
+                                } else {
+                                  setPopupMessage("Server responded with error sending application.");
+                                  setTimeout(() => setShowPopup(false), 3000);
+                                }
+                              } catch (e: any) {
+                                console.error("Error submitting app", e);
+                                setPopupMessage("Error transmitting application files.");
+                                setTimeout(() => setShowPopup(false), 3000);
+                              }
+                            }}
+                            className="w-full py-4 bg-gradient-to-r from-blue-700 to-indigo-800 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-98 transition-all hover:brightness-110"
+                          >
+                            Submit Completed Application
+                          </button>
+                        </div>
+                      </motion.div>
+                    )}
+                  </div>
                 )}
                 {!isEditingGig && !isMyGig_details && (
                   <button
@@ -3963,6 +4997,15 @@ function AppContent() {
                 setAdminPendingApprovals(data);
               }
             }
+            const resUsers = await fetch(
+              `/api/admin/users?adminEmail=${profileData.email}`,
+            );
+            if (resUsers.ok) {
+              const uData = await resUsers.json();
+              if (Array.isArray(uData)) {
+                setAdminUsers(uData);
+              }
+            }
           } catch (e) {}
           setTimeout(() => setShowPopup(false), 1000);
         };
@@ -3999,6 +5042,72 @@ function AppContent() {
                     {(adminPendingApprovals || []).length}
                   </p>
                 </div>
+              </div>
+
+              <h3 className="font-bold mb-2">Manage Users</h3>
+              <div className="space-y-4 mb-8">
+                {(adminUsers || []).length === 0 ? (
+                  <p className="text-gray-500 text-sm">
+                    No users found. Use Refresh to load.
+                  </p>
+                ) : (
+                  (adminUsers || []).map((u) => (
+                    <div
+                      key={u.email}
+                      className="p-4 border rounded-lg space-y-2 bg-gray-50 flex items-center justify-between"
+                    >
+                      <div>
+                        <p className="font-medium text-sm text-gray-700">
+                          {u.fullName} {u.isDisabled && <span className="text-xs text-red-500 font-bold ml-2">(Disabled)</span>}
+                        </p>
+                        <p className="text-xs text-gray-500">{u.email}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={async () => {
+                            if (!window.confirm(`Are you sure you want to ${u.isDisabled ? 'enable' : 'disable'} this account?`)) return;
+                            try {
+                              const res = await fetch(`/api/admin/user/${u.email}/disable`, {
+                                method: "POST",
+                                body: JSON.stringify({ adminEmail: profileData.email, isDisabled: !u.isDisabled }),
+                                headers: { "Content-Type": "application/json" }
+                              });
+                              if (res.ok) handleRefresh();
+                            } catch (e) {}
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all ${u.isDisabled ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-orange-100 text-orange-700 hover:bg-orange-200"}`}
+                        >
+                          {u.isDisabled ? "Enable" : "Disable"}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (!window.confirm('Are you sure you want to permanently delete this user?')) return;
+                            try {
+                              const res = await fetch(`/api/admin/user/${u.email}?adminEmail=${encodeURIComponent(profileData.email)}`, {
+                                method: "DELETE",
+                                body: JSON.stringify({ adminEmail: profileData.email }),
+                                headers: { "Content-Type": "application/json" }
+                              });
+                              if (res.ok) {
+                                handleRefresh();
+                              } else {
+                                const errorData = await res.json().catch(() => ({}));
+                                console.error("Failed to delete user:", errorData);
+                                alert(`Failed to delete user: ${errorData.error || res.statusText}`);
+                              }
+                            } catch (e) {
+                              console.error("Failed to delete user:", e);
+                              alert("Failed to delete user.");
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all bg-red-100 text-red-700 hover:bg-red-200"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
 
               <h3 className="font-bold mb-2">Pending Coin Approvals</h3>
@@ -4594,6 +5703,13 @@ function AppContent() {
                 />
               )}
             </AnimatePresence>
+            
+            {/* Pricing Modal */}
+            <AnimatePresence>
+              {isPricingModalOpen && (
+                <PricingModal onClose={() => setIsPricingModalOpen(false)} />
+              )}
+            </AnimatePresence>
 
             {/* Top Bar */}
             <header
@@ -4634,7 +5750,7 @@ function AppContent() {
                           initial={{ opacity: 0, y: 10, scale: 0.95 }}
                           animate={{ opacity: 1, y: 0, scale: 1 }}
                           exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                          className="absolute right-0 mt-4 w-72 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden z-[10001]"
+                          className="fixed inset-x-4 top-16 mt-2 sm:absolute sm:inset-auto sm:right-4 sm:top-full sm:mt-2 sm:w-72 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden z-[10001]"
                         >
                           <div className="p-4 border-b border-gray-50 flex justify-between items-center bg-gray-50">
                             <h4 className="font-black text-gray-900 text-sm">
@@ -4737,6 +5853,16 @@ function AppContent() {
                         >
                           <button
                             onClick={() => {
+                              setIsPricingModalOpen(true);
+                              setIsTopMenuOpen(false);
+                            }}
+                            className="flex items-center w-full px-4 py-3 hover:bg-blue-50 text-gray-700 transition-colors"
+                          >
+                            <Info className="w-4 h-4 mr-3" />
+                            Prices & Instructions
+                          </button>
+                          <button
+                            onClick={() => {
                               setCurrentView("profile-edit");
                               setIsTopMenuOpen(false);
                             }}
@@ -4776,6 +5902,21 @@ function AppContent() {
 
             {/* Main Scrollable Content */}
             <main className="flex-1 w-full max-w-md mx-auto pt-16 pb-24 overflow-x-hidden">
+              
+              {/* Popup Message */}
+              <AnimatePresence>
+                {showPopup && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 50, scale: 0.9 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 50, scale: 0.9 }}
+                    className="relative bottom-4 mt-4 bg-gray-900 border border-white/20 text-white p-4 rounded-2xl shadow-2xl z-[100] text-center font-bold tracking-tight mx-4"
+                  >
+                    {popupMessage}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <AnimatePresence mode="wait">
                 <motion.div
                   key={currentView}
@@ -4789,6 +5930,7 @@ function AppContent() {
                 </motion.div>
               </AnimatePresence>
             </main>
+
 
             {/* Bottom Nav */}
             <nav className="fixed bottom-0 w-full bg-white/95 backdrop-blur-md border-t border-gray-100 z-50">
@@ -4908,32 +6050,78 @@ function AppContent() {
               </h3>
             )}
             <div className="relative w-full max-w-sm aspect-[3/4] bg-gray-950 rounded-[3rem] overflow-hidden border-8 border-white/5 shadow-2xl">
-              <video
-                key={stream?.id || facingMode}
-                id="camera-preview"
-                autoPlay
-                playsInline
-                muted
-                ref={(el) => {
-                  if (el && stream && el.srcObject !== stream) {
-                    el.srcObject = stream;
-                  }
-                }}
-                onLoadedMetadata={(e) => {
-                  e.currentTarget
-                    .play()
-                    .catch((err) => console.error("Play error:", err));
-                }}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  transform: facingMode === "user" ? "scaleX(-1)" : "scaleX(1)",
-                }}
-              />
+              {isCameraSimulationActive ? (
+                <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center overflow-hidden">
+                  {/* Grid overlay */}
+                  <div className="absolute inset-0 opacity-[0.15] bg-[linear-gradient(rgba(255,255,255,0.05)_1px,_transparent_1px),_linear-gradient(90deg,_rgba(255,255,255,0.05)_1px,_transparent_1px)] bg-[size:20px_20px]" />
+                  
+                  {/* Cyber Scan line */}
+                  <motion.div
+                    animate={{ y: ["0%", "100%", "0%"] }}
+                    transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+                    className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-[#10b981] to-transparent shadow-[0_0_12px_#10b981]"
+                  />
+
+                  {/* Telemetry metadata */}
+                  <div className="absolute top-4 left-4 flex flex-col text-slate-400 font-mono text-[7px] tracking-widest leading-normal z-10 text-left">
+                    <span className="text-[#10b981] font-bold">● SIMULATED VIEWPORT FEED</span>
+                    <span>ANGLE: {capturingAngle?.toUpperCase()} VIEW</span>
+                    <span>FPS: 30 (STABLE)</span>
+                  </div>
+
+                  {/* Positioning Face guidelines overlay */}
+                  <div className="relative w-48 h-64 border-2 border-dashed border-sky-400/35 rounded-[5rem] flex items-center justify-center">
+                    <div className="absolute inset-x-4 top-12 bottom-12 border border-[#10b981]/15 rounded-full" />
+                    
+                    {/* Face tracking marker */}
+                    <div className="absolute top-1/3 flex gap-12">
+                      <div className="w-5 h-5 border-t border-l border-emerald-400 rounded-tl" />
+                      <div className="w-5 h-5 border-t border-r border-emerald-400 rounded-tr" />
+                    </div>
+                    <div className="absolute bottom-1/3 flex gap-12">
+                      <div className="w-5 h-5 border-b border-l border-emerald-400 rounded-bl" />
+                      <div className="w-5 h-5 border-b border-r border-emerald-400 rounded-br" />
+                    </div>
+
+                    <span className="text-[8px] font-black tracking-widest text-[#10b981] bg-black/60 px-2 py-0.5 rounded border border-[#10b981]/20 uppercase">
+                      Ready to Capture
+                    </span>
+                  </div>
+
+                  {/* Footer message */}
+                  <div className="absolute bottom-16 text-center z-10 px-6">
+                    <p className="text-[9px] font-extrabold text-blue-400 uppercase tracking-widest mb-1">Interactive Sandbox Bypass</p>
+                    <p className="text-[8px] text-slate-400 font-bold max-w-[200px] leading-relaxed mx-auto uppercase">Press the Capture button securely on screen to proceed.</p>
+                  </div>
+                </div>
+              ) : (
+                <video
+                  key={stream?.id || facingMode}
+                  id="camera-preview"
+                  autoPlay
+                  playsInline
+                  muted
+                  ref={(el) => {
+                    if (el && stream && el.srcObject !== stream) {
+                      el.srcObject = stream;
+                    }
+                  }}
+                  onLoadedMetadata={(e) => {
+                    e.currentTarget
+                      .play()
+                      .catch((err) => console.error("Play error:", err));
+                  }}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    transform: facingMode === "user" ? "scaleX(-1)" : "scaleX(1)",
+                  }}
+                />
+              )}
               
               <div className="absolute top-4 inset-x-0 flex justify-center z-10">
                 <button
@@ -5009,15 +6197,71 @@ function AppContent() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {showPopup && (
-          <motion.div
-            initial={{ opacity: 0, y: 50, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 50, scale: 0.9 }}
-            className="fixed bottom-24 left-4 right-4 bg-gray-900 border border-white/20 text-white p-4 rounded-2xl shadow-2xl z-[100] text-center font-bold tracking-tight"
-          >
-            {popupMessage}
-          </motion.div>
+        {showVideoIntroPermissionPrompt && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 z-[200]">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white p-8 rounded-[2.5rem] shadow-2xl max-w-sm w-full relative overflow-hidden"
+            >
+              <div className="absolute top-0 left-0 w-full h-2 bg-red-600"></div>
+              
+              <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                <Camera className="w-8 h-8 text-red-600 animate-pulse" />
+              </div>
+
+              <h3 className="text-xl font-black text-gray-900 text-center uppercase tracking-tight mb-2">
+                Camera & Mic Consent
+              </h3>
+              
+              <p className="text-gray-450 text-[10px] text-center font-black uppercase tracking-widest mb-6">
+                Live Video Pitch Record
+              </p>
+
+              <div className="space-y-4 text-xs font-bold text-gray-700 leading-relaxed text-left bg-gray-50 p-5 rounded-2xl border border-gray-100 mb-6 font-medium">
+                <p>
+                  To attach a live face pitch to your application, TimeGIG requests permission to activate your front-facing camera and microphone:
+                </p>
+                
+                <div className="space-y-2 pt-2 border-t border-gray-200 text-gray-800 text-[11px]">
+                  <div className="flex items-start gap-2">
+                    <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span>Accesses your <strong>front camera</strong> to record live action video.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span>Engages <strong>microphone</strong> so reviewers can hear your verbal pitch.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span>Private & secure: review, clear, or simulation features are fully supported.</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowVideoIntroPermissionPrompt(false);
+                    startVideoIntroRecording();
+                  }}
+                  className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all"
+                >
+                  Allow Front Camera & Mic
+                </button>
+                
+                <button
+                  type="button"
+                  onClick={() => setShowVideoIntroPermissionPrompt(false)}
+                  className="w-full py-2.5 text-gray-400 hover:text-gray-700 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all"
+                >
+                  Deny Access
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
 

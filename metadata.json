@@ -1,6 +1,6 @@
 {
   "name": "TimeGIG",
   "description": "A platform connecting seekers with casual or permanent work opportunities.",
-  "requestFramePermissions": ["camera"],
+  "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

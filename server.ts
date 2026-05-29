@@ -198,6 +198,29 @@ function saveLocalData(data: Record<string, any>) {
 
 let inMemoryStore = loadLocalData();
 
+// Sanitize stored applications to ensure they all have a unique .id
+if (inMemoryStore._gig_applications && Array.isArray(inMemoryStore._gig_applications)) {
+  let dirty = false;
+  inMemoryStore._gig_applications = inMemoryStore._gig_applications.map((app: any, idx: number) => {
+    if (!app.id) {
+      app.id = Date.now() + idx;
+      dirty = true;
+    }
+    if (!app.appliedAt) {
+      app.appliedAt = new Date().toISOString();
+      dirty = true;
+    }
+    if (!app.status) {
+      app.status = "pending";
+      dirty = true;
+    }
+    return app;
+  });
+  if (dirty) {
+    saveLocalData(inMemoryStore);
+  }
+}
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -272,6 +295,360 @@ app.get("/api/admin/pending-approvals", (req, res) => {
   });
 
   res.json(allPending);
+});
+
+app.get("/api/admin/users", (req, res) => {
+  const { adminEmail: passedAdminEmail } = req.query;
+  if (passedAdminEmail !== adminEmail) return res.status(403).json({ error: "Unauthorized" });
+
+  const users = Object.keys(inMemoryStore).map(userId => {
+    const state = inMemoryStore[userId];
+    return {
+      email: userId,
+      fullName: state.profileData?.fullName || "No Name",
+      isDisabled: state.profileData?.isDisabled || false,
+    };
+  });
+  res.json(users);
+});
+
+app.post("/api/admin/user/:email/disable", (req, res) => {
+  const { email } = req.params;
+  const { adminEmail: passedAdminEmail, isDisabled } = req.body;
+  if (passedAdminEmail !== adminEmail) return res.status(403).json({ error: "Unauthorized" });
+  
+  if (inMemoryStore[email] && inMemoryStore[email].profileData) {
+    inMemoryStore[email].profileData.isDisabled = isDisabled;
+    saveLocalData(inMemoryStore);
+  }
+  res.json({ status: "ok" });
+});
+
+app.delete("/api/admin/user/:email", (req, res) => {
+  const { email } = req.params;
+  // Express DELETE methods typically use query string or body depending on client, we can allow body for adminEmail
+  const passedAdminEmail = req.body?.adminEmail || req.query?.adminEmail;
+  console.log("Admin Delete Request - Email:", email, "Passed:", passedAdminEmail, "System:", adminEmail);
+  if (passedAdminEmail !== adminEmail) return res.status(403).json({ error: "Unauthorized" });
+  
+  delete inMemoryStore[email];
+  saveLocalData(inMemoryStore);
+  res.json({ status: "ok" });
+});
+
+app.get("/api/gigs/all-applications", (req, res) => {
+  const apps = inMemoryStore._gig_applications || [];
+  res.json(apps);
+});
+
+app.post("/api/gigs/apply", (req, res) => {
+  const application = req.body;
+  if (!application.id) {
+    application.id = Date.now();
+  }
+  if (!application.appliedAt) {
+    application.appliedAt = new Date().toISOString();
+  }
+  if (!application.status) {
+    application.status = "pending";
+  }
+  if (!inMemoryStore._gig_applications) {
+    inMemoryStore._gig_applications = [];
+  }
+  // Remove any duplicate previous application to the same gig by the same user
+  inMemoryStore._gig_applications = inMemoryStore._gig_applications.filter(
+    (app: any) => !(app.gigId === application.gigId && app.applicantEmail === application.applicantEmail)
+  );
+
+  inMemoryStore._gig_applications.push(application);
+
+  // Send application details directly to the gig owner's inbox immediately!
+  const applicantEmail = application.applicantEmail;
+  if (applicantEmail) {
+    // Determine owner email based on creator details
+    let ownerEmail = application.gigCreatorEmail;
+    if (!ownerEmail && application.gigCreator) {
+      for (const email of Object.keys(inMemoryStore)) {
+        if (inMemoryStore[email]?.profileData?.fullName?.toLowerCase() === application.gigCreator.toLowerCase()) {
+          ownerEmail = email;
+          break;
+        }
+      }
+    }
+
+    if (!ownerEmail && application.gigCreator) {
+      const defaultMapping: Record<string, string> = {
+        "jane smith": "jane@example.com",
+        "techcorp ltd": "contact@techcorp.com",
+        "main street market": "jobs@mainstreet.com",
+        "brew & co": "hello@brewco.com",
+        "alice martinez": "alice@example.com",
+        "modern brush llc": "info@modernbrush.com",
+        "docuclean solutions": "careers@docuclean.com",
+        "launchpad hub": "startup@launchpad.com",
+        "mark henderson": "mark@example.com",
+        "hope foundations": "help@hopefoundations.org"
+      };
+      ownerEmail = defaultMapping[application.gigCreator.toLowerCase()] || `${application.gigCreator.toLowerCase().replace(/[^a-z0-9]/g, "")}@example.com`;
+    }
+
+    if (ownerEmail) {
+      // Deterministic string parsing helper
+      const getEmailHashId = (email: string): number => {
+        let hash = 0;
+        for (let i = 0; i < email.length; i++) {
+          hash = (hash << 5) - hash + email.charCodeAt(i);
+          hash |= 0;
+        }
+        return Math.abs(hash);
+      };
+
+      const ownerId = getEmailHashId(ownerEmail);
+      const applicantId = getEmailHashId(applicantEmail);
+
+      const messageText = `Hello! I have submitted an application for your gig '${application.gigTitle}'.\n\n` +
+        `• Name: ${application.applicantName || "Applicant"}\n` +
+        `• Experience Level: ${application.applicantLevel || "Standard"}\n` +
+        `• Phone: ${application.applicantPhone || "Not provided"}\n` +
+        `• Cover Note: ${application.applicantInfo || "Not provided"}\n\n` +
+        `Please feel free to check out my profile and review my attached video pitch as well! 😊`;
+
+      // 1. Update applicant state
+      if (inMemoryStore[applicantEmail]) {
+        if (!inMemoryStore[applicantEmail].messages) {
+          inMemoryStore[applicantEmail].messages = {};
+        }
+        if (!inMemoryStore[applicantEmail].messages[ownerId]) {
+          inMemoryStore[applicantEmail].messages[ownerId] = [];
+        }
+        // Check for duplicates
+        const currentMsgs = inMemoryStore[applicantEmail].messages[ownerId];
+        const isDuplicate = currentMsgs.some((m: any) => m.text === messageText);
+        if (!isDuplicate) {
+          currentMsgs.push({
+            sender: "me",
+            text: messageText,
+            companionName: application.gigCreator || "Gig Owner",
+            companionEmail: ownerEmail,
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+
+      // 2. Update owner state (initialize of doesn't exist)
+      if (!inMemoryStore[ownerEmail]) {
+        inMemoryStore[ownerEmail] = {
+          profileCompleted: true,
+          balance: 0,
+          transactions: [],
+          pendingApprovals: [],
+          businessRequests: [],
+          isBusinessMode: true,
+          profileData: {
+            email: ownerEmail,
+            fullName: application.gigCreator || "Gig Owner",
+            phone: "+27 12 345 6789",
+            whatsapp: "+27 82 999 0000",
+            telegram: "@owner",
+            level: "Expert",
+            workPreference: "Flexible",
+            pictures: {},
+            idDocument: "id_placeholder.png",
+            certificates: [],
+            contactMethod: "Email",
+            contactHours: "9 AM - 5 PM",
+            alternativePhone: "",
+            linkedin: ""
+          },
+          appliedGigs: [],
+          messages: {}
+        };
+      }
+
+      if (inMemoryStore[ownerEmail]) {
+        if (!inMemoryStore[ownerEmail].messages) {
+          inMemoryStore[ownerEmail].messages = {};
+        }
+        if (!inMemoryStore[ownerEmail].messages[applicantId]) {
+          inMemoryStore[ownerEmail].messages[applicantId] = [];
+        }
+        // Check for duplicates
+        const currentMsgs = inMemoryStore[ownerEmail].messages[applicantId];
+        const isDuplicate = currentMsgs.some((m: any) => m.text === messageText);
+        if (!isDuplicate) {
+          currentMsgs.push({
+            sender: "other",
+            text: messageText,
+            companionName: application.applicantName || "Applicant",
+            companionEmail: applicantEmail,
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+    }
+  }
+
+  saveLocalData(inMemoryStore);
+  res.json({ status: "ok", application });
+});
+
+app.post("/api/gigs/application/:id/status", (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  
+  const apps = inMemoryStore._gig_applications || [];
+  const found = apps.find((app: any) => String(app.id) === String(id));
+  if (found) {
+    found.status = status;
+    saveLocalData(inMemoryStore);
+    res.json({ status: "ok", application: found });
+  } else {
+    res.status(404).json({ error: "Application not found" });
+  }
+});
+
+app.delete("/api/gigs/application/:id", (req, res) => {
+  const { id } = req.params;
+  console.log("Delete Application Request - ID:", id);
+  const initialCount = inMemoryStore._gig_applications ? inMemoryStore._gig_applications.length : 0;
+  console.log("Initial application count:", initialCount);
+  
+  if (inMemoryStore._gig_applications) {
+    const beforeCount = inMemoryStore._gig_applications.length;
+    inMemoryStore._gig_applications = inMemoryStore._gig_applications.filter(
+      (app: any) => String(app.id) !== String(id)
+    );
+    console.log("Apps after filter:", inMemoryStore._gig_applications.length, "Before:", beforeCount);
+  } else {
+    console.log("No _gig_applications found in store!");
+  }
+  
+  saveLocalData(inMemoryStore);
+  const finalCount = inMemoryStore._gig_applications ? inMemoryStore._gig_applications.length : 0;
+  console.log("Final application count:", finalCount);
+  res.json({ status: "ok", deletedCount: initialCount - finalCount });
+});
+
+app.get("/api/seekers", (req, res) => {
+  const seekers: any[] = [];
+  Object.keys(inMemoryStore).forEach(email => {
+    if (email.startsWith("_")) return;
+    const userState = inMemoryStore[email];
+    if (userState && userState.profileData) {
+      const p = userState.profileData;
+      if (userState.profileCompleted && p.isVisible && !p.isDisabled && p.pictures?.front) {
+        seekers.push({
+          email: p.email || email,
+          fullName: p.fullName || "Seeker",
+          workPreference: p.workPreference || "Flexible",
+          level: p.level || "Standard",
+          location: p.location || "",
+          pictures: p.pictures || {},
+          education: p.education || "",
+          languages: p.languages || "",
+          info: p.info || "",
+          experience: p.experience || "",
+          skills: p.skills || "",
+          alternativePhone: p.alternativePhone || "",
+          whatsapp: p.whatsapp || "",
+          linkedin: p.linkedin || "",
+          telegram: p.telegram || "",
+          contactMethod: p.contactMethod || "Any",
+          contactHours: p.contactHours || "Anytime",
+          phone: p.phone || ""
+        });
+      }
+    }
+  });
+
+  if (seekers.length === 0) {
+    const mockSeekers = [
+      {
+        email: "thabo.mokoena@example.com",
+        fullName: "Thabo Mokoena",
+        workPreference: "Full-Time",
+        level: "Expert",
+        location: "Johannesburg, Gauteng",
+        pictures: {
+          front: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80"
+        },
+        education: "BSc Computer Science",
+        languages: "English, Zulu, Sotho",
+        info: "Senior software designer and web developer. Over 6 years of experience building modern frontend react apps.",
+        experience: "6 Years",
+        skills: "Python, React, TypeScript, Devops",
+        phone: "+27 11 123 4567",
+        whatsapp: "+27 82 123 4567",
+        telegram: "@thabotech",
+        contactMethod: "WhatsApp",
+        contactHours: "8 AM - 6 PM"
+      },
+      {
+        email: "sarah.naidoo@example.com",
+        fullName: "Sarah Naidoo",
+        workPreference: "Part-Time",
+        level: "Specialist",
+        location: "Durban, KwaZulu-Natal",
+        pictures: {
+          front: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80"
+        },
+        education: "National Diploma in Marketing",
+        languages: "English, Afrikaans, Zulu",
+        info: "Freelance social media specialist and graphic content designer with a flair for local brand promotion.",
+        experience: "3 Years",
+        skills: "Social Media, SEO, Copywriting, Canva",
+        phone: "+27 31 234 5678",
+        whatsapp: "+27 72 234 5678",
+        telegram: "@sarahsocial",
+        contactMethod: "Email",
+        contactHours: "9 AM - 5 PM"
+      },
+      {
+        email: "lerato.sekgobela@example.com",
+        fullName: "Lerato Sekgobela",
+        workPreference: "Flexible",
+        level: "Intermediate",
+        location: "Pretoria, Gauteng",
+        pictures: {
+          front: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"
+        },
+        education: "Diploma in Hospitality Services",
+        languages: "English, Pedi, Tswana",
+        info: "Professional event coordinator and premium catering assistant. Fast, dependable, and highly rated.",
+        experience: "4 Years",
+        skills: "Catering, Event Management, Hospitality",
+        phone: "+27 12 345 6789",
+        whatsapp: "+27 83 345 6789",
+        telegram: "@leratoevents",
+        contactMethod: "Any",
+        contactHours: "Anytime"
+      },
+      {
+        email: "piet.vandermerwe@example.com",
+        fullName: "Piet van der Merwe",
+        workPreference: "Temporary",
+        level: "Expert",
+        location: "Cape Town, Western Cape",
+        pictures: {
+          front: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80"
+        },
+        education: "Trade Certificate in Electrical Engineering",
+        languages: "Afrikaans, English",
+        info: "Certified master electrician and technical handyman. Capable of complex wiring installation and electrical repairs safely.",
+        experience: "8 Years",
+        skills: "Wiring, Electrical Repairs, Handyman",
+        phone: "+27 21 456 7890",
+        whatsapp: "+27 61 456 7890",
+        telegram: "@pietelec",
+        contactMethod: "Phone",
+        contactHours: "7 AM - 4 PM"
+      }
+    ];
+
+    return res.json(mockSeekers);
+  }
+
+  res.json(seekers);
 });
 
 // Verify identity - compares face picture with ID document
