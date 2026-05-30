@@ -54,7 +54,7 @@ interface ProfileData {
   skills: string;
   workPreference: string;
   level: string;
-  pin: string;
+  password: string;
   isVisible: boolean;
   isDisabled?: boolean;
   pictures: { left: string; front: string; right: string };
@@ -85,7 +85,7 @@ const ensureProfileData = (data: any): ProfileData => {
       skills: "",
       workPreference: "",
       level: "Novice",
-      pin: "",
+      password: "",
       isVisible: true,
       pictures: { left: "", front: "", right: "" },
       idDocument: "",
@@ -113,7 +113,7 @@ const ensureProfileData = (data: any): ProfileData => {
     skills: data.skills || "",
     workPreference: data.workPreference || "",
     level: data.level || "Novice",
-    pin: data.pin || "",
+    password: data.password || "",
     isVisible: data.isVisible !== false,
     pictures: {
       left: (data.pictures && data.pictures.left) || "",
@@ -627,17 +627,26 @@ function AppContent() {
     "register",
   );
   const [loginEmail, setLoginEmail] = useState("");
-  const [loginPin, setLoginPin] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [emailCheckStatus, setEmailCheckStatus] = useState<"idle" | "checking" | "found" | "not_found">("idle");
   const [acceptTerms, setAcceptTerms] = useState(false);
-  const [verificationCode, setVerificationCode] = useState("");
-  const [enteredCode, setEnteredCode] = useState("");
-  const [tempUserData, setTempUserData] = useState<{
-    email: string;
-    pin: string;
-  } | null>(null);
-  const [showVerificationPopup, setShowVerificationPopup] = useState(false);
   const [viewingIdDocument, setViewingIdDocument] = useState<string | null>(null);
+  const [verificationSuccessEmail, setVerificationSuccessEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (window.location.pathname === "/verification-success") {
+      const params = new URLSearchParams(window.location.search);
+      const email = params.get("email");
+      if (email) {
+        setVerificationSuccessEmail(email);
+        setLoginEmail(email);
+        setTimeout(() => {
+          // Clear URL without reloading
+          window.history.replaceState({}, document.title, "/");
+        }, 5000);
+      }
+    }
+  }, []);
   const [currentView, setCurrentView] = useState<
     | "seeker"
     | "profile-edit"
@@ -1549,8 +1558,8 @@ function AppContent() {
 
   const handleLogin = async () => {
     const normalizedEmail = loginEmail.trim().toLowerCase();
-    if (!normalizedEmail || !loginPin) {
-      alert("Please enter your email and 4-digit PIN");
+    if (!normalizedEmail || !loginPassword) {
+      alert("Please enter your email and password");
       return;
     }
 
@@ -1562,7 +1571,13 @@ function AppContent() {
 
       const state = await res.json();
       if (state && state.profileData) {
-        if (state.profileData.pin === loginPin) {
+        // CHECK VERIFICATION STATUS
+        if (state.isVerified === false) {
+          alert("Your account is not activated yet. Please check your email and click the activation link.");
+          return;
+        }
+
+        if (state.profileData.password === loginPassword) {
           setIsLoggedIn(true);
           setProfileData(ensureProfileData(state.profileData));
 
@@ -1592,8 +1607,12 @@ function AppContent() {
           setPopupMessage("Welcome back!");
           setShowPopup(true);
           setTimeout(() => setShowPopup(false), 2000);
+          
+          localStorage.setItem("isLoggedIn", "true");
+          localStorage.setItem("loginEmail", loginEmail);
+          localStorage.setItem("loginPassword", loginPassword);
         } else {
-          alert("Incorrect PIN for this email. Try again.");
+          alert("Incorrect Password for this email. Try again.");
         }
       } else {
         alert(
@@ -1609,14 +1628,14 @@ function AppContent() {
     }
   };
 
-  const handleRegisterInitiate = () => {
+  const handleRegisterInitiate = async () => {
     const normalizedEmail = loginEmail.trim().toLowerCase();
     if (!normalizedEmail) {
       alert("Please enter a valid email address");
       return;
     }
-    if (loginPin.length !== 4) {
-      alert("Please choose a 4-digit secret PIN");
+    if (loginPassword.length < 6) {
+      alert("Please choose a password with at least 6 characters");
       return;
     }
     if (!acceptTerms) {
@@ -1624,76 +1643,36 @@ function AppContent() {
       return;
     }
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setVerificationCode(code);
-    setTempUserData({ email: normalizedEmail, pin: loginPin });
-    setAuthMode("verify");
-    setShowVerificationPopup(true);
-  };
-
-  const handleVerify = async () => {
-    if (enteredCode !== verificationCode || !tempUserData) {
-      alert("Invalid verification code. Please check the code in the popup.");
-      return;
-    }
-
-    const newProfile = {
-      ...profileData,
-      email: tempUserData.email,
-      pin: tempUserData.pin,
-      isVisible: true, // Ensure visible by default
-    };
-
     try {
-      // First, attempt to save the new user record to the server
-      const syncRes = await fetch("/api/sync", {
+      const res = await fetch("/api/auth/register-initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: tempUserData.email,
-          state: {
-            currentView,
-            profileCompleted: false,
-            balance: 10,
-            transactions: [],
-            pendingApprovals: [],
-            businessRequests: [],
-            isBusinessMode: false,
-            profileData: newProfile,
-            appliedGigs: [],
-            messages: [],
-            gigs: gigs, // include global gigs
-            backgroundWallpaper,
-            isLoggedIn: true,
-          },
-        }),
+          email: normalizedEmail,
+          password: loginPassword,
+          profileData: {
+            ...profileData,
+            email: normalizedEmail,
+            password: loginPassword,
+            isVisible: true,
+            isVerified: false
+          }
+        })
       });
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to start registration");
 
-      if (!syncRes.ok) {
-        const errorData = await syncRes.json().catch(() => ({}));
-        throw new Error(
-          errorData.error || "Failed to initialize user record on server",
-        );
-      }
-
-      // If server save succeeded, update local state
-      setProfileData(newProfile);
-      setIsLoggedIn(true);
-      setPopupMessage("Account verified and created successfully!");
-      setShowPopup(true);
-      setTimeout(() => setShowPopup(false), 3000);
+      setAuthMode("verify");
     } catch (e: any) {
-      console.error("Registration Sync Error:", e);
-      alert(
-        `Verification failed: ${e.message}. Please check if the backend is properly configured.`,
-      );
+      console.error("Register Init Error:", e);
+      alert(`Registration error: ${e.message}`);
     }
   };
 
   const handleLogout = () => {
     setIsLoggedIn(false);
     setAuthMode("login");
-    setShowVerificationPopup(false);
 
     // Selectively clear only session-related data to preserve things like wallpaper
     localStorage.removeItem("isLoggedIn");
@@ -1703,6 +1682,8 @@ function AppContent() {
     localStorage.removeItem("pendingApprovals");
     localStorage.removeItem("businessRequests");
     localStorage.removeItem("isBusinessMode");
+
+    setLoginPassword("");
 
     setProfileData({
       fullName: "",
@@ -1718,7 +1699,7 @@ function AppContent() {
       skills: "",
       workPreference: "",
       level: "Novice",
-      pin: "",
+      password: "",
       isVisible: true,
       pictures: { left: "", front: "", right: "" },
       idDocument: "",
@@ -5658,7 +5639,36 @@ function AppContent() {
               </p>
 
               <AnimatePresence mode="wait">
-                {authMode === "verify" ? (
+                {verificationSuccessEmail ? (
+                  <motion.div
+                    key="success"
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 1.1 }}
+                    className="space-y-6 py-4"
+                  >
+                    <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <CheckCircle className="w-10 h-10 text-green-500" />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-black text-black uppercase tracking-tight">Account Activated</h2>
+                      <p className="text-gray-400 text-[10px] font-bold uppercase tracking-widest mt-2">
+                        Welcome to the platform, {verificationSuccessEmail.split('@')[0]}
+                      </p>
+                    </div>
+                    <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                      <p className="text-[10px] text-gray-500 font-bold uppercase leading-relaxed">
+                        Your identity has been verified. You can now log in using your email and password.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setVerificationSuccessEmail(null)}
+                      className="w-full bg-black text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl"
+                    >
+                      Continue to Login
+                    </button>
+                  </motion.div>
+                ) : authMode === "verify" ? (
                   <motion.div
                     key="verify"
                     initial={{ opacity: 0, y: 10 }}
@@ -5666,37 +5676,44 @@ function AppContent() {
                     exit={{ opacity: 0, y: -10 }}
                     className="space-y-6"
                   >
+                    <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-2">
+                      <Mail className="w-10 h-10 text-blue-500" />
+                    </div>
                     <div className="p-5 bg-gray-50 rounded-2xl text-left border border-gray-100">
                       <p className="text-[11px] text-gray-500 leading-relaxed font-bold text-center uppercase tracking-wider">
-                        Enter the verification code shown on your dashboard to proceed.
+                        We've sent an activation link to <span className="text-black">{loginEmail || "your email"}</span>. Please check your inbox and click the link to activate your account.
                       </p>
                     </div>
-                    <div className="flex justify-center">
-                      <input
-                        type="text"
-                        placeholder="000000"
-                        value={enteredCode}
-                        onChange={(e) =>
-                          setEnteredCode(e.target.value.replace(/[^0-9]/g, "").slice(0, 6))
-                        }
-                        className="w-full p-5 border-2 border-gray-100 rounded-2xl bg-gray-50/50 text-center text-3xl font-black tracking-[0.4em] focus:border-black focus:bg-white outline-none transition-all"
-                      />
+                    
+                    <div className="space-y-4">
+                      <button
+                        onClick={() => window.open(`mailto:${loginEmail}`)}
+                        className="w-full bg-black text-white py-5 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-900 active:scale-95 transition-all shadow-xl flex items-center justify-center gap-3"
+                      >
+                         Open Inbox <ArrowRight className="w-4 h-4" />
+                      </button>
+                      
+                      <div className="pt-2">
+                        <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest mb-4">
+                          Didn't receive the email?
+                        </p>
+                        <button
+                          onClick={handleRegisterInitiate}
+                          className="text-[10px] font-black text-blue-600 hover:text-blue-700 uppercase tracking-widest transition-colors mr-4"
+                        >
+                          Resend Link
+                        </button>
+                        <button
+                          onClick={() => {
+                            setAuthMode("login");
+                            setEmailCheckStatus("idle");
+                          }}
+                          className="text-[10px] font-black text-gray-400 hover:text-black uppercase tracking-widest transition-colors"
+                        >
+                          Use Different Email
+                        </button>
+                      </div>
                     </div>
-                    <button
-                      onClick={handleVerify}
-                      className="w-full bg-black text-white py-5 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-900 active:scale-95 transition-all shadow-xl"
-                    >
-                      Complete Verification
-                    </button>
-                    <button
-                      onClick={() => {
-                        setAuthMode("login");
-                        setEmailCheckStatus("idle");
-                      }}
-                      className="text-[10px] font-black text-gray-400 hover:text-black uppercase tracking-widest transition-colors"
-                    >
-                      ← Use different email
-                    </button>
                   </motion.div>
                 ) : (
                   <motion.div
@@ -5742,7 +5759,7 @@ function AppContent() {
                     <div className="space-y-2 text-left">
                       <div className="flex justify-between items-center px-1">
                         <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                          {emailCheckStatus === "not_found" ? "Create Security PIN" : "Security PIN"}
+                          {emailCheckStatus === "not_found" ? "Create Secure Password" : "Security Password"}
                         </label>
                         {emailCheckStatus === "found" && (
                           <span className="text-[9px] font-black text-green-600 uppercase tracking-widest bg-green-50 px-2 py-0.5 rounded-full">
@@ -5752,13 +5769,10 @@ function AppContent() {
                       </div>
                       <input
                         type="password"
-                        placeholder="••••"
-                        maxLength={4}
-                        value={loginPin}
-                        onChange={(e) =>
-                          setLoginPin(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))
-                        }
-                        className="w-full p-4 border-2 border-gray-100 rounded-2xl bg-gray-50/50 focus:border-black focus:bg-white outline-none tracking-[1em] text-2xl font-black transition-all text-center"
+                        placeholder="••••••••"
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        className="w-full p-4 border-2 border-gray-100 rounded-2xl bg-gray-50/50 focus:border-black focus:bg-white outline-none tracking-[0.3em] text-xl font-black transition-all text-center"
                       />
                     </div>
 
@@ -5776,7 +5790,7 @@ function AppContent() {
                           className="mt-1 w-5 h-5 rounded-lg border-blue-200 text-black focus:ring-black"
                         />
                         <label htmlFor="terms" className="text-[10px] text-gray-500 leading-relaxed font-medium text-left">
-                          I agree to become a TimeGIG member and accept the <span className="text-black font-black underline">Membership Terms</span>. I'll remember this PIN for future access.
+                          I agree to become a TimeGIG member and accept the <span className="text-black font-black underline">Membership Terms</span>. I'll remember this password for future access.
                         </label>
                       </motion.div>
                     )}
@@ -5789,7 +5803,7 @@ function AppContent() {
                           handleRegisterInitiate();
                         }
                       }}
-                      disabled={(emailCheckStatus === "not_found" && !acceptTerms) || !loginEmail || loginPin.length < 4}
+                      disabled={(emailCheckStatus === "not_found" && !acceptTerms) || !loginEmail || loginPassword.length < 6}
                       className="w-full bg-black disabled:bg-gray-200 text-white py-5 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-2xl hover:bg-gray-900 active:scale-95 transition-all mt-6"
                     >
                       {emailCheckStatus === "found" ? "Continue to App" : emailCheckStatus === "not_found" ? "Get Started" : "Enter Details"}
@@ -6410,43 +6424,6 @@ function AppContent() {
                   Deny Access
                 </button>
               </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {showVerificationPopup && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 z-[200]">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="bg-white p-8 rounded-[2.5rem] shadow-2xl max-w-sm w-full text-center relative overflow-hidden"
-            >
-              <div className="absolute top-0 left-0 w-full h-2 bg-[#007749]"></div>
-              <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-6">
-                <Mail className="w-8 h-8 text-[#001489]" />
-              </div>
-              <h3 className="text-2xl font-bold text-gray-900 mb-2">
-                Verification Code
-              </h3>
-              <p className="text-gray-500 text-sm mb-8 font-medium">
-                Use this code to verify your account
-              </p>
-
-              <div className="bg-gray-50 p-6 rounded-2xl border-2 border-dashed border-[#FFB81C]/50 mb-8 flex items-center justify-center">
-                <span className="text-4xl font-mono font-black tracking-[0.2em] text-[#001489]">
-                  {verificationCode}
-                </span>
-              </div>
-
-              <button
-                onClick={() => setShowVerificationPopup(false)}
-                className="w-full bg-[#007749] text-white py-4 rounded-2xl font-bold hover:bg-[#00663d] transition-all shadow-lg shadow-green-100"
-              >
-                Got it
-              </button>
             </motion.div>
           </div>
         )}

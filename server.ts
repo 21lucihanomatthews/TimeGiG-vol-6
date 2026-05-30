@@ -5,6 +5,7 @@ import { createServer as createViteServer } from "vite";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
+import { Resend } from "resend";
 // @ts-ignore
 import { PNG } from "pngjs";
 // @ts-ignore
@@ -175,6 +176,9 @@ const supabaseUrl = process.env.SUPABASE_URL || "";
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || "";
 const supabase = supabaseUrl ? createClient(supabaseUrl, supabaseKey) : null;
 
+// Initialize Resend
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+
 // Persistence helper for fallback
 function loadLocalData(): Record<string, any> {
   try {
@@ -258,6 +262,84 @@ app.get("/api/check-account", async (req, res) => {
   }
 
   res.json({ exists });
+});
+
+app.post("/api/auth/register-initiate", async (req, res) => {
+  const { email, password, profileData } = req.body;
+  if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const verificationToken = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+
+  // Store user in memory as pending
+  inMemoryStore[normalizedEmail] = {
+    ...inMemoryStore[normalizedEmail],
+    isVerified: false,
+    verificationToken,
+    profileData: {
+      ...profileData,
+      email: normalizedEmail,
+      password,
+    },
+    balance: 10,
+    transactions: [],
+  };
+  saveLocalData(inMemoryStore);
+
+  // Send email if Resend is configured
+  if (resend) {
+    try {
+      const protocol = req.headers['x-forwarded-proto'] || 'http';
+      const host = req.headers.host;
+      const verificationLink = `${protocol}://${host}/api/auth/verify-email?email=${encodeURIComponent(normalizedEmail)}&token=${verificationToken}`;
+
+      await resend.emails.send({
+        from: 'TimeGIG Auth <onboarding@resend.dev>',
+        to: normalizedEmail,
+        subject: 'Activate Your TimeGIG Account',
+        html: `
+          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+            <h1 style="color: #000; text-align: center;">Welcome to TimeGIG</h1>
+            <p>Thank you for signing up! Please click the button below to activate your account and start using the app.</p>
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${verificationLink}" style="background-color: #000; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Activate Account</a>
+            </div>
+            <p style="color: #666; font-size: 12px;">If you didn't create an account, you can safely ignore this email.</p>
+            <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+            <p style="color: #999; font-size: 10px; text-align: center;">Powered by TimeGIG Cloud</p>
+          </div>
+        `
+      });
+      res.json({ status: "ok", message: "Verification email sent" });
+    } catch (e: any) {
+      console.error("Email sending error:", e);
+      res.status(500).json({ error: "Failed to send verification email" });
+    }
+  } else {
+    // If resend is not configured, we might want to auto-verify or show a console log for debugging
+    console.warn("RESEND_API_KEY is missing. Verification link:", `${normalizedEmail} token: ${verificationToken}`);
+    res.json({ status: "ok", message: "Resend not configured, verification bypassed for dev", bypass: true });
+  }
+});
+
+app.get("/api/auth/verify-email", async (req, res) => {
+  const { email, token } = req.query;
+  if (!email || !token) return res.status(400).send("Invalid verification request");
+
+  const normalizedEmail = (email as string).trim().toLowerCase();
+  const user = inMemoryStore[normalizedEmail];
+
+  if (user && user.verificationToken === token) {
+    user.isVerified = true;
+    user.verificationToken = undefined;
+    saveLocalData(inMemoryStore);
+    
+    // Redirect to app - in development we might need to handle the origin differently
+    // But usually '/' should work for the same-origin proxy
+    res.redirect("/verification-success?email=" + encodeURIComponent(normalizedEmail));
+  } else {
+    res.status(400).send("Invalid or expired verification token");
+  }
 });
 
 // Admin payments helper

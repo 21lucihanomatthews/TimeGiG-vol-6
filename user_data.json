@@ -2,7 +2,7 @@
   "21lucihanomatthews@gmail.com": {
     "currentView": "seeker",
     "profileCompleted": false,
-    "balance": 10,
+    "balance": 0,
     "transactions": [],
     "pendingApprovals": [],
     "businessRequests": [],
@@ -21,7 +21,7 @@
       "skills": "",
       "workPreference": "",
       "level": "Novice",
-      "pin": "1019",
+      "password": "1019",
       "isVisible": true,
       "pictures": {
         "left": "",
