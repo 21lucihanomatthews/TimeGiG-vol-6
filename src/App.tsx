@@ -653,7 +653,7 @@ function AppContent() {
     () => localStorage.getItem("profileCompleted") === "true",
   );
   const [balance, setBalance] = useState(() =>
-    Number(localStorage.getItem("balance") || "0"),
+    Number(localStorage.getItem("balance") || "10"),
   );
   const [transactions, setTransactions] = useState<
     {
@@ -1562,11 +1562,6 @@ function AppContent() {
 
       const state = await res.json();
       if (state && state.profileData) {
-        if (state.profileData.isDisabled) {
-          alert("Your account has been disabled. Please contact support.");
-          setLoginPin("");
-          return;
-        }
         if (state.profileData.pin === loginPin) {
           setIsLoggedIn(true);
           setProfileData(ensureProfileData(state.profileData));
@@ -1659,7 +1654,7 @@ function AppContent() {
           state: {
             currentView,
             profileCompleted: false,
-            balance: 0,
+            balance: 10,
             transactions: [],
             pendingApprovals: [],
             businessRequests: [],
@@ -3812,12 +3807,12 @@ function AppContent() {
                 )}
                 
                 <div className="mt-8 pt-6 border-t border-gray-100 flex flex-col items-center">
-                   <h3 className="text-red-500 font-bold mb-2">Danger Zone</h3>
                    <button
                      type="button"
                      onClick={async () => {
-                       if (window.confirm("Are you sure you want to disable your account immediately? You will be signed out.")) {
-                         const updatedProfile = { ...profileData, isDisabled: true };
+                       const newStatus = !profileData.isDisabled;
+                       if (window.confirm(`Are you sure you want to ${newStatus ? 'disable' : 'enable'} your account?`)) {
+                         const updatedProfile = { ...profileData, isDisabled: newStatus };
                          setProfileData(updatedProfile);
                          try {
                            await fetch("/api/sync", {
@@ -3828,14 +3823,21 @@ function AppContent() {
                                state: { profileData: updatedProfile }
                              })
                            });
-                         } catch (e) {}
-                         handleLogout();
-                         setShowSplash(true);
+                           setPopupMessage(`Account ${newStatus ? 'disabled' : 'enabled'} successfully`);
+                           setShowPopup(true);
+                           setTimeout(() => setShowPopup(false), 2000);
+                         } catch (e) {
+                           console.error("Failed to sync account status:", e);
+                         }
                        }
                      }}
-                     className="px-6 py-2 bg-red-50 text-red-600 border border-red-200 rounded-full text-xs uppercase tracking-widest font-bold hover:bg-red-100 transition-colors"
+                     className={`px-6 py-2 rounded-full text-xs uppercase tracking-widest font-bold transition-all ${
+                       profileData.isDisabled 
+                        ? "bg-green-50 text-green-600 border border-green-200 hover:bg-green-100" 
+                        : "bg-red-50 text-red-600 border border-red-200 hover:bg-red-100"
+                     }`}
                    >
-                     Disable Account
+                     {profileData.isDisabled ? "Enable Account" : "Disable Account"}
                    </button>
                 </div>
 
@@ -5637,186 +5639,169 @@ function AppContent() {
             transition={{ duration: 0.5 }}
             className="w-full flex justify-center p-4"
           >
-            <div className="bg-white/95 backdrop-blur-sm p-8 rounded-3xl shadow-2xl border border-white/20 w-full max-w-md text-center">
-              <h1 className="text-4xl font-extrabold text-black mb-2 tracking-tighter">
+            <div className="bg-white p-10 rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.1)] border border-gray-100 w-full max-w-md text-center relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-1.5 bg-gray-50">
+                <motion.div 
+                  className="h-full bg-black flex"
+                  initial={{ width: "33%" }}
+                  animate={{ 
+                    width: emailCheckStatus === "found" || emailCheckStatus === "not_found" ? "66%" : "33%" 
+                  }}
+                />
+              </div>
+
+              <h1 className="text-3xl font-[900] text-black mb-1 tracking-tight">
                 TimeGIG
               </h1>
-              <p className="text-gray-500 mb-8">
-                {authMode === "register"
-                  ? "Join the community"
-                  : authMode === "login"
-                    ? "Welcome back"
-                    : "Verification"}
+              <p className="text-gray-400 text-sm font-medium mb-10 uppercase tracking-[0.2em]">
+                {emailCheckStatus === "found" ? "Welcome Back" : emailCheckStatus === "not_found" ? "Create Account" : "Access Portal"}
               </p>
 
               <AnimatePresence mode="wait">
                 {authMode === "verify" ? (
                   <motion.div
                     key="verify"
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    transition={{ duration: 0.3 }}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
                     className="space-y-6"
                   >
-                    <div className="p-4 bg-yellow-50 border border-yellow-100 rounded-2xl text-left">
-                      <p className="text-xs text-yellow-800 leading-relaxed font-medium text-center">
-                        Enter the one-time verification code shown on screen to
-                        finalize your registration.
+                    <div className="p-5 bg-gray-50 rounded-2xl text-left border border-gray-100">
+                      <p className="text-[11px] text-gray-500 leading-relaxed font-bold text-center uppercase tracking-wider">
+                        Enter the verification code shown on your dashboard to proceed.
                       </p>
                     </div>
-                    <div className="flex justify-center gap-2">
+                    <div className="flex justify-center">
                       <input
                         type="text"
-                        placeholder="6-DIGIT CODE"
+                        placeholder="000000"
                         value={enteredCode}
                         onChange={(e) =>
-                          setEnteredCode(
-                            e.target.value.replace(/[^0-9]/g, "").slice(0, 6),
-                          )
+                          setEnteredCode(e.target.value.replace(/[^0-9]/g, "").slice(0, 6))
                         }
-                        className="w-full p-4 border-2 border-blue-100 rounded-2xl bg-blue-50/30 text-center text-2xl font-mono tracking-[0.5em] focus:border-blue-500 outline-none"
+                        className="w-full p-5 border-2 border-gray-100 rounded-2xl bg-gray-50/50 text-center text-3xl font-black tracking-[0.4em] focus:border-black focus:bg-white outline-none transition-all"
                       />
                     </div>
                     <button
                       onClick={handleVerify}
-                      className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold shadow-xl shadow-blue-200 hover:bg-blue-700 active:scale-95 transition-all"
+                      className="w-full bg-black text-white py-5 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-900 active:scale-95 transition-all shadow-xl"
                     >
-                      Verify One-Time Code
+                      Complete Verification
                     </button>
                     <button
-                      onClick={() => setAuthMode("login")}
-                      className="text-sm font-semibold text-gray-500"
+                      onClick={() => {
+                        setAuthMode("login");
+                        setEmailCheckStatus("idle");
+                      }}
+                      className="text-[10px] font-black text-gray-400 hover:text-black uppercase tracking-widest transition-colors"
                     >
-                      Go Back
+                      ← Use different email
                     </button>
                   </motion.div>
                 ) : (
                   <motion.div
-                    key={authMode}
-                    initial={{ opacity: 0, x: authMode === "login" ? -20 : 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: authMode === "login" ? 20 : -20 }}
-                    transition={{ duration: 0.3 }}
-                    className="space-y-4"
+                    key="auth-main"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="space-y-5"
                   >
-                    <div className="space-y-1 text-left">
-                      <label className="text-xs font-bold text-gray-400 uppercase ml-1">
+                    <div className="space-y-2 text-left">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">
                         Email Address
                       </label>
                       <div className="relative">
                         <input
                           type="email"
-                          placeholder="you@example.com"
+                          placeholder="name@company.com"
                           value={loginEmail}
                           onChange={(e) => setLoginEmail(e.target.value)}
                           className={`w-full p-4 border-2 ${
-                            emailCheckStatus === "found" ? "border-green-500" : 
-                            emailCheckStatus === "not_found" ? "border-blue-300" :
+                            emailCheckStatus === "found" ? "border-green-500/30" : 
+                            emailCheckStatus === "not_found" ? "border-blue-500/30" :
                             "border-gray-100"
-                          } rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none transition-all`}
+                          } rounded-2xl bg-gray-50/50 focus:border-black focus:bg-white outline-none transition-all font-medium`}
                         />
                         <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center">
                           {emailCheckStatus === "checking" && (
-                            <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                            <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
                           )}
                           {emailCheckStatus === "found" && (
-                            <div className="bg-green-100 text-green-600 p-1 rounded-full">
-                              <Check className="w-4 h-4" />
+                            <div className="text-green-500">
+                              <Check className="w-5 h-5 stroke-[3]" />
                             </div>
                           )}
                           {emailCheckStatus === "not_found" && (
-                            <div className="bg-blue-50 text-blue-600 p-1 rounded-full">
-                              <UserPlus className="w-4 h-4" />
+                            <div className="text-blue-500">
+                              <UserPlus className="w-5 h-5 stroke-[3]" />
                             </div>
                           )}
                         </div>
                       </div>
-                      {emailCheckStatus === "found" && (
-                        <p className="text-[10px] text-green-600 font-bold px-2 mt-1 uppercase tracking-wider">
-                          Welcome back! Account found.
-                        </p>
-                      )}
-                      {emailCheckStatus === "not_found" && (
-                        <p className="text-[10px] text-blue-600 font-bold px-2 mt-1 uppercase tracking-wider">
-                          New here? Welcome! Let's get you set up.
-                        </p>
-                      )}
                     </div>
-                    <div className="space-y-1 text-left">
-                      <label className="text-xs font-bold text-gray-400 uppercase ml-1">
-                        {authMode === "register"
-                          ? "Choose Your PIN"
-                          : "Enter Your PIN"}
-                      </label>
+
+                    <div className="space-y-2 text-left">
+                      <div className="flex justify-between items-center px-1">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                          {emailCheckStatus === "not_found" ? "Create Security PIN" : "Security PIN"}
+                        </label>
+                        {emailCheckStatus === "found" && (
+                          <span className="text-[9px] font-black text-green-600 uppercase tracking-widest bg-green-50 px-2 py-0.5 rounded-full">
+                            Identity Verified
+                          </span>
+                        )}
+                      </div>
                       <input
                         type="password"
                         placeholder="••••"
                         maxLength={4}
                         value={loginPin}
                         onChange={(e) =>
-                          setLoginPin(
-                            e.target.value.replace(/[^0-9]/g, "").slice(0, 4),
-                          )
+                          setLoginPin(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))
                         }
-                        className="w-full p-4 border-2 border-gray-100 rounded-2xl bg-gray-50/50 focus:border-blue-500 focus:bg-white outline-none tracking-widest text-2xl transition-all text-center"
+                        className="w-full p-4 border-2 border-gray-100 rounded-2xl bg-gray-50/50 focus:border-black focus:bg-white outline-none tracking-[1em] text-2xl font-black transition-all text-center"
                       />
                     </div>
 
-                    {authMode === "register" && (
-                      <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100 mt-2">
+                    {emailCheckStatus === "not_found" && (
+                      <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        className="flex items-start gap-4 p-4 bg-blue-50/50 rounded-2xl border border-blue-100/50"
+                      >
                         <input
                           type="checkbox"
                           id="terms"
                           checked={acceptTerms}
                           onChange={(e) => setAcceptTerms(e.target.checked)}
-                          className="mt-1 w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          className="mt-1 w-5 h-5 rounded-lg border-blue-200 text-black focus:ring-black"
                         />
-                        <label
-                          htmlFor="terms"
-                          className="text-[11px] text-gray-500 leading-tight text-left"
-                        >
-                          I accept the{" "}
-                          <span className="text-blue-600 font-bold underline">
-                            Terms and Conditions
-                          </span>{" "}
-                          and understand my PIN will be required for all future
-                          access.
+                        <label htmlFor="terms" className="text-[10px] text-gray-500 leading-relaxed font-medium text-left">
+                          I agree to become a TimeGIG member and accept the <span className="text-black font-black underline">Membership Terms</span>. I'll remember this PIN for future access.
                         </label>
-                      </div>
+                      </motion.div>
                     )}
 
                     <button
-                      onClick={
-                        authMode === "register"
-                          ? handleRegisterInitiate
-                          : handleLogin
-                      }
-                      disabled={authMode === "register" && !acceptTerms}
-                      className={`w-full ${authMode === "register" ? "bg-gray-900 disabled:bg-gray-400" : "bg-[#001489]"} text-white py-4 rounded-2xl font-bold shadow-xl hover:opacity-90 active:scale-95 transition-all mt-4`}
-                    >
-                      {authMode === "register"
-                        ? "Save & Register"
-                        : "Login Access"}
-                    </button>
-
-                    <button
                       onClick={() => {
-                        setAuthMode(
-                          authMode === "register" ? "login" : "register",
-                        );
-                        setAcceptTerms(false);
+                        if (emailCheckStatus === "found") {
+                          handleLogin();
+                        } else if (emailCheckStatus === "not_found" && acceptTerms) {
+                          handleRegisterInitiate();
+                        }
                       }}
-                      className="text-sm font-semibold text-[#001489] hover:text-[#000d5a] mt-2 block mx-auto underline underline-offset-4"
+                      disabled={(emailCheckStatus === "not_found" && !acceptTerms) || !loginEmail || loginPin.length < 4}
+                      className="w-full bg-black disabled:bg-gray-200 text-white py-5 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-2xl hover:bg-gray-900 active:scale-95 transition-all mt-6"
                     >
-                      {authMode === "register"
-                        ? "Already have an account? Login"
-                        : "Don't have an account? Register"}
+                      {emailCheckStatus === "found" ? "Continue to App" : emailCheckStatus === "not_found" ? "Get Started" : "Enter Details"}
                     </button>
+                    
+                    <p className="text-[9px] text-gray-300 font-black uppercase tracking-widest pt-4">
+                      {emailCheckStatus === "found" ? "Encrypted Session Active" : "No credit card required to start"}
+                    </p>
                   </motion.div>
                 )}
               </AnimatePresence>
-              <p className="mt-12 text-[10px] text-gray-400 font-medium tracking-wider uppercase">
+              <p className="mt-8 text-[10px] text-gray-300 font-black uppercase tracking-widest text-center">
                 Secure access powered by TimeGIG Cloud
               </p>
             </div>
@@ -6067,6 +6052,20 @@ function AppContent() {
                   </motion.div>
                 )}
               </AnimatePresence>
+
+              {profileData.isDisabled && (
+                <div className="mx-4 mb-4 bg-red-50 border border-red-100 p-4 rounded-2xl flex flex-col items-center text-center gap-2">
+                  <div className="bg-red-100 p-2 rounded-full">
+                    <Ban className="w-5 h-5 text-red-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-red-900 uppercase tracking-tight">Account Deactivated</h3>
+                    <p className="text-[10px] text-red-700 font-bold uppercase tracking-widest mt-1">
+                      Your profile is currently hidden from the platform. Use settings to reactivate.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <AnimatePresence mode="wait">
                 <motion.div

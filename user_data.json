@@ -1,0 +1,47 @@
+{
+  "21lucihanomatthews@gmail.com": {
+    "currentView": "seeker",
+    "profileCompleted": false,
+    "balance": 10,
+    "transactions": [],
+    "pendingApprovals": [],
+    "businessRequests": [],
+    "isBusinessMode": false,
+    "profileData": {
+      "fullName": "",
+      "dob": "",
+      "location": "",
+      "phone": "",
+      "email": "21lucihanomatthews@gmail.com",
+      "gender": "",
+      "education": "",
+      "languages": "",
+      "info": "",
+      "experience": "",
+      "skills": "",
+      "workPreference": "",
+      "level": "Novice",
+      "pin": "1019",
+      "isVisible": true,
+      "pictures": {
+        "left": "",
+        "front": "",
+        "right": ""
+      },
+      "idDocument": "",
+      "isVerified": false,
+      "certificates": [],
+      "alternativePhone": "",
+      "whatsapp": "",
+      "linkedin": "",
+      "telegram": "",
+      "contactMethod": "Any",
+      "contactHours": "",
+      "isDisabled": false
+    },
+    "appliedGigs": [],
+    "messages": [],
+    "gigs": [],
+    "backgroundWallpaper": null
+  }
+}

@@ -466,7 +466,7 @@ app.post("/api/gigs/apply", (req, res) => {
       if (!inMemoryStore[ownerEmail]) {
         inMemoryStore[ownerEmail] = {
           profileCompleted: true,
-          balance: 0,
+          balance: 10,
           transactions: [],
           pendingApprovals: [],
           businessRequests: [],
