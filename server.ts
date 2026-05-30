@@ -934,7 +934,10 @@ app.get("/api/state/:userId", async (req, res) => {
   const { userId } = req.params;
   
   if (!supabase) {
-    return res.json(inMemoryStore[userId] || {});
+    if (!inMemoryStore[userId]) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    return res.json(inMemoryStore[userId]);
   }
 
   try {
@@ -945,8 +948,11 @@ app.get("/api/state/:userId", async (req, res) => {
       .single();
 
     if (error) {
-      // If Supabase fails (e.g. missing table), always return from local store
-      return res.json(inMemoryStore[userId] || {});
+      // If Supabase fails (e.g. missing table), return from local store if exists, else 404
+      if (!inMemoryStore[userId]) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      return res.json(inMemoryStore[userId]);
     }
     
     res.json(data?.app_state || {});

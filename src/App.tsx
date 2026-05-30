@@ -647,6 +647,37 @@ function AppContent() {
       }
     }
   }, []);
+
+  // Hydrate state from server if logged in
+  useEffect(() => {
+    const hydrate = async () => {
+      const storedEmail = localStorage.getItem("loginEmail");
+      if (isLoggedIn && storedEmail) {
+        try {
+          const res = await fetch(`/api/state/${encodeURIComponent(storedEmail.trim().toLowerCase())}`);
+          if (res.ok) {
+            const state = await res.json();
+            if (state && state.profileData) {
+              setProfileData(ensureProfileData(state.profileData));
+              if (state.currentView) setCurrentView(state.currentView);
+              if (state.profileCompleted !== undefined) setProfileCompleted(state.profileCompleted);
+              if (state.balance !== undefined) setBalance(state.balance);
+              if (state.transactions) setTransactions(state.transactions);
+              if (state.pendingApprovals) setPendingApprovals(state.pendingApprovals);
+              if (state.businessRequests) setBusinessRequests(state.businessRequests);
+              if (state.isBusinessMode !== undefined) setIsBusinessMode(state.isBusinessMode);
+              if (state.appliedGigs) setAppliedGigs(state.appliedGigs);
+              if (state.messages) setMessages(state.messages);
+            }
+          }
+        } catch (e) {
+          console.error("Hydration failed", e);
+        }
+      }
+    };
+    hydrate();
+  }, [isLoggedIn]);
+  const [showTermsModal, setShowTermsModal] = useState(false);
   const [currentView, setCurrentView] = useState<
     | "seeker"
     | "profile-edit"
@@ -1566,6 +1597,12 @@ function AppContent() {
     try {
       const res = await fetch(`/api/state/${normalizedEmail}`);
       if (!res.ok) {
+        if (res.status === 404) {
+          setEmailCheckStatus("not_found");
+          setAuthMode("register");
+          alert(`No account found for ${normalizedEmail}. Please register first.`);
+          return;
+        }
         throw new Error(`Server responded with ${res.status}`);
       }
 
@@ -1655,7 +1692,9 @@ function AppContent() {
             email: normalizedEmail,
             password: loginPassword,
             isVisible: true,
-            isVerified: false
+            isVerified: false,
+            acceptedTerms: true,
+            acceptedTermsAt: new Date().toISOString()
           }
         })
       });
@@ -5790,7 +5829,7 @@ function AppContent() {
                           className="mt-1 w-5 h-5 rounded-lg border-blue-200 text-black focus:ring-black"
                         />
                         <label htmlFor="terms" className="text-[10px] text-gray-500 leading-relaxed font-medium text-left">
-                          I agree to become a TimeGIG member and accept the <span className="text-black font-black underline">Membership Terms</span>. I'll remember this password for future access.
+                          I agree to become a TimeGIG member and accept the <button onClick={(e) => { e.preventDefault(); setShowTermsModal(true); }} className="text-black font-black underline cursor-pointer">Membership Terms</button>. I'll remember this password for future access.
                         </label>
                       </motion.div>
                     )}
@@ -6424,6 +6463,58 @@ function AppContent() {
                   Deny Access
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showTermsModal && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-[300]">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white p-6 rounded-[2.5rem] shadow-2xl max-w-lg w-full max-h-[80vh] overflow-y-auto relative"
+            >
+              <div className="sticky top-0 bg-white pb-4 mb-4 border-b border-gray-100 flex justify-between items-center z-10">
+                <h3 className="text-xl font-black text-black uppercase tracking-tight">Membership Terms</h3>
+                <button onClick={() => setShowTermsModal(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+                  <X className="w-6 h-6 text-black" />
+                </button>
+              </div>
+              
+              <div className="space-y-6 text-left">
+                <section>
+                  <h4 className="text-xs font-black text-black uppercase tracking-widest mb-2">1. Identity Verification</h4>
+                  <p className="text-[11px] text-gray-500 leading-relaxed font-medium">To maintain the security of our South African community, all members must verify their identity. We process your data according to POPIA regulations.</p>
+                </section>
+
+                <section>
+                  <h4 className="text-xs font-black text-black uppercase tracking-widest mb-2">2. Digital Wallet & Payments</h4>
+                  <p className="text-[11px] text-gray-500 leading-relaxed font-medium">TimeGIG provides a digital wallet for gig transactions. Funds are held securely and released only upon successful completion of work.</p>
+                </section>
+
+                <section>
+                  <h4 className="text-xs font-black text-black uppercase tracking-widest mb-2">3. Community Standards</h4>
+                  <p className="text-[11px] text-gray-500 leading-relaxed font-medium">Respect, punctuality, and quality work are the pillars of TimeGIG. Harassment or fraudulent activity will result in immediate permanent suspension.</p>
+                </section>
+
+                <section>
+                  <h4 className="text-xs font-black text-black uppercase tracking-widest mb-2">4. Platform Fees</h4>
+                  <p className="text-[11px] text-gray-500 leading-relaxed font-medium">A small service fee is deducted from each gig to cover platform maintenance, secure South African banking integrations, and 24/7 support.</p>
+                </section>
+
+                <div className="pt-4 border-t border-gray-100">
+                  <p className="text-[10px] text-gray-400 font-bold uppercase text-center">Last Updated: May 2026</p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setShowTermsModal(false)}
+                className="w-full bg-black text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest mt-8 shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all"
+              >
+                Close & Continue
+              </button>
             </motion.div>
           </div>
         )}
