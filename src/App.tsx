@@ -1611,6 +1611,7 @@ function AppContent() {
         // CHECK VERIFICATION STATUS
         if (state.isVerified === false) {
           alert("Your account is not activated yet. Please check your email and click the activation link.");
+          setAuthMode("verify");
           return;
         }
 
@@ -1702,7 +1703,12 @@ function AppContent() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to start registration");
 
-      setAuthMode("verify");
+      if (data.bypass) {
+        alert("Email verification bypassed (Development mode). Your account is ready!");
+        handleLogin(); // Try to login immediately if bypassed
+      } else {
+        setAuthMode("verify");
+      }
     } catch (e: any) {
       console.error("Register Init Error:", e);
       alert(`Registration error: ${e.message}`);
@@ -5695,9 +5701,9 @@ function AppContent() {
                         Welcome to the platform, {verificationSuccessEmail.split('@')[0]}
                       </p>
                     </div>
-                    <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
-                      <p className="text-[10px] text-gray-500 font-bold uppercase leading-relaxed">
-                        Your identity has been verified. You can now log in using your email and password.
+                    <div className="p-4 bg-green-50 rounded-2xl border border-green-100">
+                      <p className="text-[10px] text-green-700 font-bold uppercase leading-relaxed">
+                        Your account has been activated! You can now log in using your email and password.
                       </p>
                     </div>
                     <button
@@ -5741,6 +5747,25 @@ function AppContent() {
                           className="text-[10px] font-black text-blue-600 hover:text-blue-700 uppercase tracking-widest transition-colors mr-4"
                         >
                           Resend Link
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const res = await fetch("/api/auth/bypass-verification", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ email: loginEmail })
+                              });
+                              if (!res.ok) throw new Error("Bypass failed");
+                              alert("Development Mode: Verification bypassed.");
+                              handleLogin();
+                            } catch (e) {
+                              alert("Bypass failed. Please check your internet connection.");
+                            }
+                          }}
+                          className="text-[10px] font-black text-amber-600 hover:text-amber-700 uppercase tracking-widest transition-colors mr-4"
+                        >
+                          Skip for now
                         </button>
                         <button
                           onClick={() => {

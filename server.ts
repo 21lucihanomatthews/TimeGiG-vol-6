@@ -293,6 +293,9 @@ app.post("/api/auth/register-initiate", async (req, res) => {
       const host = req.headers.host;
       const verificationLink = `${protocol}://${host}/api/auth/verify-email?email=${encodeURIComponent(normalizedEmail)}&token=${verificationToken}`;
 
+      console.log(`[AUTH] Sending verification email to ${normalizedEmail}`);
+      console.log(`[AUTH] Verification Link: ${verificationLink}`);
+
       await resend.emails.send({
         from: 'TimeGIG Auth <onboarding@resend.dev>',
         to: normalizedEmail,
@@ -340,6 +343,21 @@ app.get("/api/auth/verify-email", async (req, res) => {
   } else {
     res.status(400).send("Invalid or expired verification token");
   }
+});
+
+// Manual bypass for development if email fails
+app.post("/api/auth/bypass-verification", async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: "Email required" });
+  
+  const normalizedEmail = email.trim().toLowerCase();
+  if (inMemoryStore[normalizedEmail]) {
+    inMemoryStore[normalizedEmail].isVerified = true;
+    inMemoryStore[normalizedEmail].verificationToken = undefined;
+    saveLocalData(inMemoryStore);
+    return res.json({ status: "ok", message: "Bypassed successfully" });
+  }
+  res.status(404).json({ error: "User not found" });
 });
 
 // Admin payments helper
